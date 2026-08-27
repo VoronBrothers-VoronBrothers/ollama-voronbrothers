@@ -2134,8 +2134,9 @@ func launchInteractiveModel(cmd *cobra.Command, modelName string) error {
 	}
 
 	opts := agentTUIOptions{
-		Model:   modelName,
-		Options: map[string]any{},
+		Model:         modelName,
+		Options:       map[string]any{},
+		AllowAllTools: true, // full access by default; Shift+Tab toggles review mode
 	}
 	info, err := prepareAgentModel(cmd, client, &opts, false)
 	if err != nil {

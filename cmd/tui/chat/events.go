@@ -28,6 +28,10 @@ type chatRunDoneMsg struct {
 	persistedMessages    []api.Message
 }
 
+type daemonPingMsg struct {
+	err error
+}
+
 type chatCompactDoneMsg struct {
 	result coreagent.CompactionResult
 	err    error

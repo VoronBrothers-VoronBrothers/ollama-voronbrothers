@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -138,7 +140,9 @@ type chatModel struct {
 	approvalController  *chatApprovalController
 	approvalState       *coreagent.ApprovalState
 	cloudAuthPrompt     *cloudAuthPrompt
+	pendingPrompts      []string
 	pendingModel        string
+	pollingDaemon       bool
 	defaultAllowAll     bool
 	permissionNotice    string
 	selection           chatSelection
@@ -398,10 +402,23 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Tell the model what to do instead."
 			return m.withFlowTranscriptFlush(nil)
 		}
-		if msg.err != nil {
-			if !m.eventErrorRendered {
-				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: msg.err.Error(), err: msg.err.Error()}))
+		if msg.err != nil && !m.eventErrorRendered {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: msg.err.Error(), err: msg.err.Error()}))
+		}
+		if len(m.pendingPrompts) > 0 {
+			if msg.err != nil && isNetworkDownError(msg.err) {
+				// Daemon down: don't drain the queue into failing runs.
+				// Wait for a healthy /api/tags, then resume with the next prompt.
+				m.pollingDaemon = true
+				m.status = "waiting for ollama…"
+				return m.withFlowTranscriptFlush(daemonPingCmd())
 			}
+			next := m.pendingPrompts[0]
+			m.pendingPrompts = m.pendingPrompts[1:]
+			m.status = "queued"
+			return m.startRun(queuedMessagePrefix(next))
+		}
+		if msg.err != nil {
 			m.status = "error"
 			return m.withFlowTranscriptFlush(nil)
 		}
@@ -425,6 +442,24 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.Update(chatRunDoneMsg{err: context.Canceled, newMessagesPersisted: true})
 		}
 		return m, nil
+
+	case daemonPingMsg:
+		if !m.pollingDaemon {
+			return m, nil
+		}
+		if msg.err != nil {
+			return m, daemonPingCmd() // keep polling
+		}
+		// Daemon is back up: resume from the front of the queue.
+		m.pollingDaemon = false
+		if len(m.pendingPrompts) > 0 {
+			next := m.pendingPrompts[0]
+			m.pendingPrompts = m.pendingPrompts[1:]
+			m.status = "queued"
+			return m.startRun(queuedMessagePrefix(next))
+		}
+		m.status = "ready"
+		return m.withFlowTranscriptFlush(nil)
 
 	case cloudAuthTickMsg:
 		if m.cloudAuthPrompt != nil {
@@ -1029,6 +1064,36 @@ func (m *chatModel) resetWorkingDir() {
 	m.workingDir = m.opts.WorkingDir
 }
 
+// daemonPingCmd probes the daemon via /api/tags. Used to wait for ollama
+// to come back instead of cascading queued prompts into failing runs.
+func daemonPingCmd() tea.Cmd {
+	return func() tea.Msg {
+		c, err := api.ClientFromEnvironment()
+		if err != nil {
+			return daemonPingMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err = c.List(ctx)
+		return daemonPingMsg{err: err}
+	}
+}
+
+// isNetworkDownError reports whether a run error means the ollama daemon
+// was unreachable (connection refused / unexpected EOF), not a model or
+// request problem.
+func isNetworkDownError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") || strings.Contains(msg, "unexpected EOF") || strings.Contains(msg, "ECONNREFUSED")
+}
+
 func (m *chatModel) startRun(input string) (tea.Model, tea.Cmd) {
 	displayInput, message, err := m.userMessageFromInput(input, input)
 	if err != nil {
@@ -1115,7 +1180,7 @@ func (m *chatModel) startSkillRun(name, prompt string) (tea.Model, tea.Cmd) {
 
 func (m *chatModel) startRunWithMessages(displayInput, historyInput string, newMessages []api.Message, extraSystemPrompt, skillName string) (tea.Model, tea.Cmd) {
 	m.addPromptHistory(historyInput)
-	m.entries = append(m.entries, newChatEntry(chatEntry{role: "user", content: displayInput}))
+	m.entries = append(m.entries, newChatEntry(chatEntry{role: "user", content: displayInput, startedAt: time.Now()}))
 	if len(newMessages) > 1 {
 		m.entries = append(m.entries, entriesFromMessages(newMessages[1:])...)
 	}

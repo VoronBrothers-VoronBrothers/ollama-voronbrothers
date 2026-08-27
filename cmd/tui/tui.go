@@ -95,18 +95,7 @@ func shouldExpandOthers(state *launch.LauncherState) bool {
 }
 
 func buildMenuItems(state *launch.LauncherState, showOthers bool) []menuItem {
-	items := []menuItem{runModelMenuItem}
-	items = append(items, launcherIntegrationItems(state)...)
-
-	otherItems := otherIntegrationItems(state)
-	switch {
-	case showOthers:
-		items = append(items, otherItems...)
-	case len(otherItems) > 0:
-		items = append(items, othersMenuItem)
-	}
-
-	return items
+	return []menuItem{runModelMenuItem}
 }
 
 func integrationMenuItem(state launch.LauncherIntegrationState) menuItem {

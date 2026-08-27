@@ -154,7 +154,7 @@ func (m *chatModel) ensureAssistantEntry() int {
 	if len(m.entries) > 0 && m.entries[len(m.entries)-1].role == "assistant" {
 		return len(m.entries) - 1
 	}
-	m.entries = append(m.entries, newChatEntry(chatEntry{role: "assistant"}))
+	m.entries = append(m.entries, newChatEntry(chatEntry{role: "assistant", startedAt: time.Now()}))
 	return len(m.entries) - 1
 }
 
@@ -512,13 +512,20 @@ func (m chatModel) renderEntryLines(entry chatEntry, body string, width int) []s
 		innerWidth := max(1, width-lipgloss.Width(chatMessageIndent))
 		lines := indentLines(splitRenderedBody(renderMarkdownForView(body, innerWidth)), chatMessageIndent)
 		lines = append(lines, indentLines(renderMetricsLines(entry.metrics, innerWidth), chatMessageIndent)...)
+		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
+			lines = append([]string{ts}, lines...)
+		}
 		return lines
 	case "thinking":
 		return renderThinkingLines(entry, width)
 	case "system", "slash":
 		return splitRenderedBody(renderMarkdownForView(body, width))
 	case "user":
-		return renderUserMessageLines(body, width)
+		lines := renderUserMessageLines(body, width)
+		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
+			lines = append([]string{ts}, lines...)
+		}
+		return lines
 	case "compaction_summary":
 		return renderCompactionSummaryLines(entry, width)
 	case "tool":
@@ -534,6 +541,13 @@ func (m chatModel) renderEntryLines(entry chatEntry, body string, width int) []s
 	default:
 		return wrapChatText(body, width)
 	}
+}
+
+func entryTimestampLine(entry chatEntry) string {
+	if entry.startedAt.IsZero() {
+		return ""
+	}
+	return chatMetaStyle.Render(entry.startedAt.Format("15:04:05"))
 }
 
 func renderUserMessageLines(content string, width int) []string {
@@ -1408,6 +1422,13 @@ func truncateRunes(value string, limit int) string {
 }
 
 func (m chatModel) notificationLine() string {
+	if len(m.pendingPrompts) > 0 {
+		first := strings.ReplaceAll(strings.TrimSpace(m.pendingPrompts[0]), "\n", " ")
+		if r := []rune(first); len(r) > 40 {
+			first = string(r[:40]) + "…"
+		}
+		return fmt.Sprintf("queued (%d): %s", len(m.pendingPrompts), first)
+	}
 	status := strings.TrimSpace(m.status)
 	if status == "" || status == "ready" {
 		return ""

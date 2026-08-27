@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	bashTimeout        = 3 * time.Minute
+	bashTimeout        = 40 * time.Second
 	bashWaitDelay      = 1 * time.Second
 	maxBashOutputBytes = 60_000
 )

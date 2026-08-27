@@ -35,15 +35,15 @@ func (r *Read) Schema() api.ToolFunction {
 	props := api.NewToolPropertiesMap()
 	props.Set("path", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Path to the file to read, relative to the working directory.",
+		Description: "File path (relative, absolute, or with ~).",
 	})
 	props.Set("start", api.ToolProperty{
 		Type:        api.PropertyType{"integer"},
-		Description: "Optional 1-based line to start reading from.",
+		Description: "Optional 1-based line to start from.",
 	})
 	props.Set("end", api.ToolProperty{
 		Type:        api.PropertyType{"integer"},
-		Description: "Optional 1-based inclusive line to stop reading at.",
+		Description: "Optional inclusive end line.",
 	})
 	return api.ToolFunction{
 		Name:        r.Name(),
@@ -67,7 +67,12 @@ func (r *Read) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[
 		return agent.ToolResult{}, fmt.Errorf("path parameter is required")
 	}
 
-	file, info, err := openRegularFile(toolCtx.WorkingDir, path, true)
+	absPath, err := normalizeToolPath(toolCtx.WorkingDir, path)
+	if err != nil {
+		return agent.ToolResult{}, err
+	}
+
+	file, info, err := openRegularFile(absPath)
 	if err != nil {
 		return agent.ToolResult{}, err
 	}
@@ -108,24 +113,24 @@ func (e *Edit) Name() string {
 }
 
 func (e *Edit) Description() string {
-	return "Edit a text file in the current working directory by replacing exact text. Pass multiple edits to change separate parts of the file in one call."
+	return "Edit a file by exact-text replacement."
 }
 
 func (e *Edit) Schema() api.ToolFunction {
 	editProps := api.NewToolPropertiesMap()
 	editProps.Set("old_text", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Exact text for one targeted replacement. Must match the original file exactly once and must not overlap with any other edit's old_text.",
+		Description: "Exact text to replace.",
 	})
 	editProps.Set("new_text", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Replacement text for this targeted edit.",
+		Description: "Replacement text.",
 	})
 
 	props := api.NewToolPropertiesMap()
 	props.Set("path", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Path to the file to edit, relative to the working directory.",
+		Description: "File path (relative, absolute, or with ~).",
 	})
 	props.Set("edits", api.ToolProperty{
 		Type: api.PropertyType{"array"},
@@ -134,11 +139,11 @@ func (e *Edit) Schema() api.ToolFunction {
 			Properties: editProps,
 			Required:   []string{"old_text", "new_text"},
 		},
-		Description: "One or more exact-text replacements. Each is matched against the original file, not against the output of earlier edits. Keep old_text as small as possible while still unique in the file; merge changes to the same or adjacent lines into a single edit.",
+		Description: "Edits matched against the original file. Each old_text must be unique; keep it minimal.",
 	})
 	props.Set("replace_all", api.ToolProperty{
 		Type:        api.PropertyType{"boolean"},
-		Description: "Replace every occurrence. Defaults to false; only applies when a single edit is provided.",
+		Description: "Replace every occurrence (single edit only).",
 	})
 	return api.ToolFunction{
 		Name:        e.Name(),
@@ -167,11 +172,16 @@ func (e *Edit) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[
 		return agent.ToolResult{}, err
 	}
 
-	if err := rejectFinalSymlink(toolCtx.WorkingDir, path); err != nil {
+	absPath, err := normalizeToolPath(toolCtx.WorkingDir, path)
+	if err != nil {
 		return agent.ToolResult{}, err
 	}
 
-	file, info, err := openRegularFile(toolCtx.WorkingDir, path, false)
+	if err := rejectFinalSymlink(absPath); err != nil {
+		return agent.ToolResult{}, err
+	}
+
+	file, info, err := openRegularFile(absPath)
 	if err != nil {
 		return agent.ToolResult{}, err
 	}
@@ -250,11 +260,82 @@ func (e *Edit) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[
 		return agent.ToolResult{}, fmt.Errorf("edited content is too large (%d bytes)", len(updated))
 	}
 
-	if err := writeFileAtomic(toolCtx.WorkingDir, path, []byte(updated), info.Mode().Perm()); err != nil {
+	if err := writeFileAtomic(absPath, []byte(updated), info.Mode().Perm()); err != nil {
 		return agent.ToolResult{}, err
 	}
 
 	return agent.ToolResult{Content: fmt.Sprintf("Updated %s (%d edit%s, %d replacement%s).", path, len(edits), plural(len(edits)), replacements, plural(replacements))}, nil
+}
+
+type Write struct{}
+
+func (w *Write) Name() string {
+	return "write"
+}
+
+func (w *Write) Description() string {
+	return "Create or overwrite a file with the given content."
+}
+
+func (w *Write) Schema() api.ToolFunction {
+	props := api.NewToolPropertiesMap()
+	props.Set("path", api.ToolProperty{
+		Type:        api.PropertyType{"string"},
+		Description: "File path (relative, absolute, or with ~).",
+	})
+	props.Set("content", api.ToolProperty{
+		Type:        api.PropertyType{"string"},
+		Description: "Full file content.",
+	})
+	return api.ToolFunction{
+		Name:        w.Name(),
+		Description: w.Description(),
+		Parameters: api.ToolFunctionParameters{
+			Type:       "object",
+			Properties: props,
+			Required:   []string{"path", "content"},
+		},
+	}
+}
+
+func (w *Write) RequiresApproval(map[string]any) bool {
+	return true
+}
+
+func (w *Write) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[string]any) (agent.ToolResult, error) {
+	path, ok := args["path"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return agent.ToolResult{}, fmt.Errorf("path parameter is required")
+	}
+	content, ok := args["content"].(string)
+	if !ok {
+		return agent.ToolResult{}, fmt.Errorf("content parameter is required")
+	}
+
+	absPath, err := normalizeToolPath(toolCtx.WorkingDir, path)
+	if err != nil {
+		return agent.ToolResult{}, err
+	}
+
+	select {
+	case <-ctx.Done():
+		return agent.ToolResult{}, ctx.Err()
+	default:
+	}
+
+	perm := os.FileMode(0o644)
+	if info, err := os.Lstat(absPath); err == nil {
+		perm = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return agent.ToolResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return agent.ToolResult{}, err
+	}
+	if err := writeFileAtomic(absPath, []byte(content), perm); err != nil {
+		return agent.ToolResult{}, err
+	}
+	return agent.ToolResult{Content: fmt.Sprintf("Wrote %s (%d bytes).", path, len(content))}, nil
 }
 
 // editReplacement is one targeted replacement within an edit call.
@@ -366,101 +447,60 @@ func editAmbiguousError(path string, editIndex, totalEdits, occurrences int) err
 	return fmt.Errorf("edits[%d].old_text matched %d times in %s; each edit must match exactly once, so provide more surrounding context", editIndex, occurrences, path)
 }
 
-func cleanRelativePath(path string) (string, error) {
+// normalizeToolPath resolves a tool-supplied path to a clean absolute path:
+// trims whitespace, expands a leading "~" to the home directory, resolves
+// relative paths against the working directory, and cleans the result. Any
+// absolute path (including ../ that escapes the working directory) is
+// accepted as-is.
+func normalizeToolPath(workingDir, path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path parameter is required")
 	}
-	if filepath.IsAbs(path) {
-		return "", fmt.Errorf("absolute paths are not allowed")
+	if path == "~" || strings.HasPrefix(path, "~"+string(os.PathSeparator)) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~"))
 	}
-	cleaned := filepath.Clean(path)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path escapes working directory")
+	if !filepath.IsAbs(path) {
+		base, err := workingDirAbs(workingDir)
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(base, path)
 	}
-	return cleaned, nil
+	return filepath.Clean(path), nil
 }
 
-func openRegularFile(workingDir, path string, allowAbsolute bool) (*os.File, os.FileInfo, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, nil, fmt.Errorf("path parameter is required")
-	}
-	if allowAbsolute && filepath.IsAbs(path) {
-		cleaned := filepath.Clean(path)
-		info, err := os.Lstat(cleaned)
-		if err != nil {
-			return nil, nil, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, nil, fmt.Errorf("%s is a symlink; read the target file directly", path)
-		}
-		if err := rejectNonRegularFile(path, info); err != nil {
-			return nil, nil, err
-		}
-		file, err := os.Open(cleaned)
-		if err != nil {
-			return nil, nil, err
-		}
-		info, err = file.Stat()
-		if err != nil {
-			file.Close()
-			return nil, nil, err
-		}
-		if err := rejectNonRegularFile(path, info); err != nil {
-			file.Close()
-			return nil, nil, err
-		}
-		return file, info, nil
-	}
-
-	rel, err := cleanRelativePath(path)
+// openRegularFile opens an absolute, cleaned path for reading. Symlinks are
+// rejected so callers operate on the real target file directly.
+func openRegularFile(abs string) (*os.File, os.FileInfo, error) {
+	info, err := os.Lstat(abs)
 	if err != nil {
 		return nil, nil, err
 	}
-	root, err := openWorkingRoot(workingDir)
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, fmt.Errorf("%s is a symlink; read the target file directly", abs)
+	}
+	if err := rejectNonRegularFile(abs, info); err != nil {
+		return nil, nil, err
+	}
+	file, err := os.Open(abs)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer root.Close()
-
-	if _, err := regularRootFileInfo(root, rel, path); err != nil {
-		return nil, nil, err
-	}
-	file, err := root.Open(rel)
-	if err != nil {
-		return nil, nil, rootPathError(err)
-	}
-	info, err := file.Stat()
+	info, err = file.Stat()
 	if err != nil {
 		file.Close()
 		return nil, nil, err
 	}
-	if err := rejectNonRegularFile(path, info); err != nil {
+	if err := rejectNonRegularFile(abs, info); err != nil {
 		file.Close()
 		return nil, nil, err
 	}
 	return file, info, nil
-}
-
-func regularRootFileInfo(root *os.Root, rel, path string) (os.FileInfo, error) {
-	info, err := root.Lstat(rel)
-	if err != nil {
-		return nil, rootPathError(err)
-	}
-	// Reject symlinks outright. os.Root.Open follows symlinks via openat
-	// without O_NOFOLLOW, so a symlink inside the working root that points
-	// outside it (e.g. ./notes -> ~/.ssh/id_rsa) would otherwise be read
-	// transparently, bypassing the working-directory confinement that the
-	// bash denylist enforces for direct credential reads. The caller must
-	// operate on the real target file instead.
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s is a symlink; read the target file directly", path)
-	}
-	if err := rejectNonRegularFile(path, info); err != nil {
-		return nil, err
-	}
-	return info, nil
 }
 
 func rejectNonRegularFile(path string, info os.FileInfo) error {
@@ -473,21 +513,18 @@ func rejectNonRegularFile(path string, info os.FileInfo) error {
 	return nil
 }
 
-func writeFileAtomic(workingDir, path string, data []byte, perm os.FileMode) error {
-	rel, err := cleanRelativePath(path)
-	if err != nil {
+// writeFileAtomic writes data to the absolute, cleaned path via a temporary
+// file in the same directory.
+func writeFileAtomic(abs string, data []byte, perm os.FileMode) error {
+	info, err := os.Lstat(abs)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	root, err := openWorkingRoot(workingDir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	if err := rejectRootFinalSymlink(root, rel, path); err != nil {
-		return err
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; edit the target file directly", abs)
 	}
 
-	parent, name := filepath.Split(rel)
+	parent, name := filepath.Split(abs)
 	tmpBase := fmt.Sprintf(".%s.ollama-tmp-%d", name, os.Getpid())
 	for i := 0; ; i++ {
 		candidateName := tmpBase
@@ -495,16 +532,16 @@ func writeFileAtomic(workingDir, path string, data []byte, perm os.FileMode) err
 			candidateName = fmt.Sprintf("%s-%d", tmpBase, i)
 		}
 		candidate := filepath.Join(parent, candidateName)
-		file, err := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		file, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 		if os.IsExist(err) {
 			continue
 		}
 		if err != nil {
-			return rootPathError(err)
+			return err
 		}
 		if err := file.Chmod(perm); err != nil {
 			closeErr := file.Close()
-			_ = root.Remove(candidate)
+			_ = os.Remove(candidate)
 			if closeErr != nil {
 				return closeErr
 			}
@@ -513,57 +550,25 @@ func writeFileAtomic(workingDir, path string, data []byte, perm os.FileMode) err
 		writeErr := writeAllAndSync(file, data)
 		closeErr := file.Close()
 		if writeErr != nil || closeErr != nil {
-			_ = root.Remove(candidate)
+			_ = os.Remove(candidate)
 			if writeErr != nil {
 				return writeErr
 			}
 			return closeErr
 		}
-		if err := root.Rename(candidate, rel); err != nil {
-			_ = root.Remove(candidate)
-			return rootPathError(err)
-		}
-		return nil
+		return os.Rename(candidate, abs)
 	}
 }
 
-func rejectFinalSymlink(workingDir, path string) error {
-	rel, err := cleanRelativePath(path)
+func rejectFinalSymlink(abs string) error {
+	info, err := os.Lstat(abs)
 	if err != nil {
 		return err
-	}
-	root, err := openWorkingRoot(workingDir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	return rejectRootFinalSymlink(root, rel, path)
-}
-
-func rejectRootFinalSymlink(root *os.Root, rel, path string) error {
-	info, err := root.Lstat(rel)
-	if err != nil {
-		return rootPathError(err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; edit the target file directly", path)
+		return fmt.Errorf("%s is a symlink; edit the target file directly", abs)
 	}
 	return nil
-}
-
-func rootPathError(err error) error {
-	if err != nil && strings.Contains(err.Error(), "path escapes") {
-		return fmt.Errorf("path escapes working directory")
-	}
-	return err
-}
-
-func openWorkingRoot(workingDir string) (*os.Root, error) {
-	base, err := workingDirAbs(workingDir)
-	if err != nil {
-		return nil, err
-	}
-	return os.OpenRoot(base)
 }
 
 func writeAllAndSync(file *os.File, data []byte) error {

@@ -136,8 +136,24 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 	var multiline MultilineState
 	var thinkExplicitlySet bool = opts.Think != nil
 
+	// Background reader: lines entered while a response is being generated
+	// are queued in this channel and sent after generation completes.
+	type lineResult struct {
+		line string
+		err  error
+	}
+	// Buffered so multiple messages can queue during one generation.
+	pending := make(chan lineResult, 128)
+	go func() {
+		for {
+			l, e := scanner.Readline()
+			pending <- lineResult{l, e}
+		}
+	}()
+
 	for {
-		line, err := scanner.Readline()
+		res := <-pending
+		line, err := res.line, res.err
 		switch {
 		case errors.Is(err, io.EOF):
 			fmt.Println()

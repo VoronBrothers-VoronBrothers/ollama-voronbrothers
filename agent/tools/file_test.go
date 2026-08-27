@@ -292,22 +292,39 @@ func TestEditRejectsNoChange(t *testing.T) {
 	}
 }
 
-func TestEditRejectsEscapingPath(t *testing.T) {
+func TestEditAcceptsEscapingPath(t *testing.T) {
 	dir := t.TempDir()
-	_, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
+	outside := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: sub}, map[string]any{
 		"path":     "../outside.txt",
 		"old_text": "old",
 		"new_text": "new",
 	})
-	if err == nil {
-		t.Fatal("expected escaping path to fail")
+	if err != nil {
+		t.Fatalf("expected escaping path to succeed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "path escapes working directory") {
-		t.Fatalf("err = %v", err)
+	if !strings.Contains(result.Content, "Updated") {
+		t.Fatalf("result = %q", result.Content)
+	}
+	content, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "new\n" {
+		t.Fatalf("content = %q", content)
 	}
 }
 
-func TestEditRejectsSymlinkEscape(t *testing.T) {
+func TestEditAcceptsSymlinkDirInPath(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "note.txt"), []byte("old\n"), 0o644); err != nil {
@@ -317,24 +334,24 @@ func TestEditRejectsSymlinkEscape(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	_, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
+	result, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
 		"path":     filepath.Join("link", "note.txt"),
 		"old_text": "old",
 		"new_text": "new",
 	})
-	if err == nil {
-		t.Fatal("expected symlink escape to fail")
+	if err != nil {
+		t.Fatalf("expected edit through symlink dir to succeed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "path escapes working directory") {
-		t.Fatalf("err = %v", err)
+	if !strings.Contains(result.Content, "Updated") {
+		t.Fatalf("result = %q", result.Content)
 	}
 
 	content, err := os.ReadFile(filepath.Join(outside, "note.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != "old\n" {
-		t.Fatalf("outside content changed to %q", content)
+	if string(content) != "new\n" {
+		t.Fatalf("outside content = %q", content)
 	}
 }
 
@@ -376,7 +393,7 @@ func TestEditRejectsFinalSymlink(t *testing.T) {
 	}
 }
 
-func TestReadRejectsParentOutsideCurrentWorkingDir(t *testing.T) {
+func TestReadAcceptsParentPath(t *testing.T) {
 	root := t.TempDir()
 	subdir := filepath.Join(root, "sub")
 	if err := os.Mkdir(subdir, 0o755); err != nil {
@@ -386,14 +403,14 @@ func TestReadRejectsParentOutsideCurrentWorkingDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := (&Read{}).Execute(context.Background(), agent.ToolContext{WorkingDir: subdir}, map[string]any{
+	result, err := (&Read{}).Execute(context.Background(), agent.ToolContext{WorkingDir: subdir}, map[string]any{
 		"path": "../note.txt",
 	})
-	if err == nil {
-		t.Fatal("expected parent path to fail")
+	if err != nil {
+		t.Fatalf("expected parent path to succeed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "path escapes working directory") {
-		t.Fatalf("err = %v", err)
+	if result.Content != "hello" {
+		t.Fatalf("content = %q", result.Content)
 	}
 }
 
@@ -567,5 +584,175 @@ func TestReadRejectsInvalidRange(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "end must") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEditAcceptsAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
+		"path":     path,
+		"old_text": "hello",
+		"new_text": "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hi world\n" {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestEditAcceptsAbsoluteSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// Editing the symlink by its own absolute path must be rejected,
+	// mirroring the relative-path behaviour.
+	_, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
+		"path":     link,
+		"old_text": "old",
+		"new_text": "new",
+	})
+	if err == nil {
+		t.Fatal("expected symlink edit to fail")
+	}
+	if !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEditAbsolutePathOutsideWorkingDir(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	path := filepath.Join(outside, "note.txt")
+	if err := os.WriteFile(path, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
+		"path":     path,
+		"old_text": "hello",
+		"new_text": "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hi world\n" {
+		t.Fatalf("content = %q", content)
+	}
+	if !strings.Contains(result.Content, "Updated") {
+		t.Fatalf("result = %q", result.Content)
+	}
+}
+
+func TestNormalizeToolPath(t *testing.T) {
+	dir := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name    string
+		working string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{"relative", dir, "a/b.txt", filepath.Join(dir, "a", "b.txt"), false},
+		{"dot", dir, ".", dir, false},
+		{"escaping relative", dir, "../up.txt", filepath.Join(filepath.Dir(dir), "up.txt"), false},
+		{"absolute", dir, "/etc/passwd", "/etc/passwd", false},
+		{"whitespace", dir, "  a.txt  ", filepath.Join(dir, "a.txt"), false},
+		{"empty", dir, "", "", true},
+		{"tilde", dir, "~", home, false},
+		{"tilde path", dir, "~/x/y.txt", filepath.Join(home, "x", "y.txt"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeToolPath(tc.working, tc.path)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Fatalf("got = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "note.txt"), []byte("hello tilde"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (&Read{}).Execute(context.Background(), agent.ToolContext{WorkingDir: t.TempDir()}, map[string]any{
+		"path": "~/note.txt",
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if result.Content != "hello tilde" {
+		t.Fatalf("content = %q", result.Content)
+	}
+}
+
+func TestEditExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "note.txt")
+	if err := os.WriteFile(path, []byte("hello tilde"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (&Edit{}).Execute(context.Background(), agent.ToolContext{WorkingDir: t.TempDir()}, map[string]any{
+		"path":     "~/note.txt",
+		"old_text": "hello",
+		"new_text": "hi",
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hi tilde" {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestReadNonexistentFile(t *testing.T) {
+	dir := t.TempDir()
+	_, err := (&Read{}).Execute(context.Background(), agent.ToolContext{WorkingDir: dir}, map[string]any{
+		"path": "/nonexistent/no/such/file.txt",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("err = %v, want IsNotExist", err)
 	}
 }

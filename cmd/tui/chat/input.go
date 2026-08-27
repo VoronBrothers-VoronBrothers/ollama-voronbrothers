@@ -52,7 +52,7 @@ const (
 
 var chatSlashCommands = []chatSlashCommand{
 	{name: "/model", description: "switch models"},
-	{name: "/new", description: "start a new chat"},
+	{name: "/new", description: "start a new chat", aliases: []string{"/новый", "/нов"}},
 	{name: "/think", description: "set thinking mode"},
 	{name: "/tools", description: "toggle tools on or off"},
 	{name: "/system", usage: "/system [on|off]", description: "show or set the built-in system prompt"},
@@ -60,7 +60,8 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/compact", description: "summarize older context"},
 	{name: "/help", description: "show commands", aliases: []string{"/?"}},
 	{name: "/bye", description: "exit", aliases: []string{"/exit"}},
-	{name: "/prompt", description: "show full prompt, tools, and messages"},
+	{name: "/prompt", description: "show full prompt, tools, and messages", aliases: []string{"/промт"}},
+	{name: "/очисточередь", description: "clear queued prompts"},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
 }
 
@@ -88,6 +89,12 @@ func BuiltinSlashCommandNames() []string {
 	return reserved
 }
 
+// queuedMessagePrefix метит сообщение, которое пришло из очереди,
+// чтобы модели было понятно, что его поставили во время генерации.
+func queuedMessagePrefix(text string) string {
+	return "[из очереди]\n" + text
+}
+
 func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {
 	m.syncInputPlaceholders()
 	input := strings.TrimSpace(string(m.input))
@@ -96,7 +103,11 @@ func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 	_, _, hasSlashCommand := slashCommandInvocation(input)
 	if (m.running || m.compacting) && !hasSlashCommand {
-		m.status = "wait for current response"
+		m.pendingPrompts = append(m.pendingPrompts, input)
+		m.status = fmt.Sprintf("queued (%d)", len(m.pendingPrompts))
+		m.input = nil
+		m.inputCursor = 0
+		m.inputCursorSet = false
 		return *m, nil
 	}
 
@@ -166,6 +177,10 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return m.handleSystemCommand(args)
 	case command == "/skills":
 		return m.handleSkillsCommand(args)
+	case command == "/очисточередь":
+		m.pendingPrompts = nil
+		m.status = "ready"
+		return *m, nil
 	case command == "/prompt":
 		return m.handlePromptCommand(args)
 	case command == "/save":

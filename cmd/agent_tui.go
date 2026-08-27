@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -63,6 +62,12 @@ func prepareAgentModel(cmd *cobra.Command, client *api.Client, opts *agentTUIOpt
 	opts.Think, err = inferThinkingOption(&info.Capabilities, &runOptions{Model: opts.Model, Think: opts.Think}, thinkExplicit)
 	if err != nil {
 		return nil, err
+	}
+	// Default the agent TUI to low thinking effort when the user did not
+	// explicitly choose a level. The inference above falls back to "on",
+	// which the model resolves to its default (medium) effort; we prefer low.
+	if !thinkExplicit && opts.Think != nil {
+		opts.Think = &api.ThinkValue{Value: "low"}
 	}
 	opts.MultiModal = showResponseSupportsMultimodal(info)
 	opts.ContextWindowTokens = showResponseContextWindow(info)
@@ -211,23 +216,9 @@ func agentSystemPromptAtWithWorkingDir(now time.Time, modelName string, modelSys
 
 func agentDefaultSystemPromptWithWorkingDir(now time.Time, modelName string, workingDir string) string {
 	date := now.Format("Monday, January 2, 2006")
-	shellName := "bash"
-	if runtime.GOOS == "windows" {
-		shellName = "PowerShell"
-	}
 	parts := []string{
-		"You are running in Ollama, in a harness to help the user accomplish tasks, and the model is " + modelName + ".",
-		"",
 		"Current date: " + date + ".",
-		"",
 	}
-	parts = append(parts,
-		"Be concise, practical, and action-oriented. Use tools when they materially help. Verify current or fast-changing facts with web tools when available; otherwise state uncertainty.",
-		"",
-		"Use "+shellName+" carefully. Prefer read-only inspection first. Stay within the current working directory unless explicitly asked. Surface intent before risky actions such as writes, deletes, moves, installs, git state changes, service changes, sudo, secrets access, network scripts, or commands outside the working directory. Request approval when required and do not work around denied approvals.",
-		"",
-		"Tell the user about meaningful changes, verification, failures, blockers, assumptions, and risks. Summarize routine tool output instead of dumping it.",
-	)
 	if workingDir != "" {
 		parts = append(parts, "Current working directory: "+strconv.Quote(workingDir)+".")
 	}
@@ -261,6 +252,8 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	}
 	registry.Register(&agenttools.Read{})
 	registry.Register(&agenttools.Edit{})
+	registry.Register(&agenttools.Write{})
+	registry.Register(&agenttools.Memory{})
 	if len(skillCatalog.List()) > 0 {
 		registry.Register(&agenttools.Skill{Catalog: skillCatalog})
 	}
