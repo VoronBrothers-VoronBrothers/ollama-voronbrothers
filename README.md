@@ -354,3 +354,24 @@ console.log(response.message.content);
 - [Gentoo](https://github.com/gentoo/guru/tree/master/app-misc/ollama)
 - [Flox](https://flox.dev/blog/ollama-part-one)
 - [Guix channel](https://codeberg.org/tusharhero/ollama-guix)
+
+## Custom Build (VoronBrothers)
+
+<p align="center">
+  <img src="docs/ollama-logo.svg" alt="ollama llama logo" width="120"/>
+</p>
+
+Фork с кастомными функциями для tmux-оркестрации:
+
+- **Авто-`/thinking low`** — каждый новый промпт автоматически отправляется с `/thinking low`, экономит токены и время.
+- **Полный доступ по умолчанию** — модель имеет полный доступ к инструментам без подтверждения (full-access by default).
+- **Очередь сообщений (message queue)** — можно быстро отправлять несколько промптов подряд; они выстраиваются в очередь (`queued (N): ...`) и обрабатываются по очереди.
+
+### Слэш-команды и алиасы
+
+| Команда | Алиас | Назначение |
+|---------|-------|------------|
+| `/new`  | `/новый`, `/нов`  | Новый чат |
+| `/prompt` | `/промт`     | Отправить промпт в очередь |
+| `/очисточередь` | —           | Очистить очередь ожидающих промптов |
+
