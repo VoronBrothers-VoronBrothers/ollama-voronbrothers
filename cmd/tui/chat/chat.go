@@ -399,6 +399,14 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finishLiveMessagesForStoppedRun(msg.newMessagesPersisted, msg.persistedMessages)
 		}
 		if wasCanceling || isChatContextCanceledError(msg.err) {
+			// Esc-cancel: continue with the queued prompt if any, so
+			// stopping a run doesn't leave pending messages stuck in queue.
+			if len(m.pendingPrompts) > 0 {
+				next := m.pendingPrompts[0]
+				m.pendingPrompts = m.pendingPrompts[1:]
+				m.status = "queued"
+				return m.startRun(queuedMessagePrefix(next))
+			}
 			m.status = "Tell the model what to do instead."
 			return m.withFlowTranscriptFlush(nil)
 		}

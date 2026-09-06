@@ -517,7 +517,11 @@ func (m chatModel) renderEntryLines(entry chatEntry, body string, width int) []s
 		}
 		return lines
 	case "thinking":
-		return renderThinkingLines(entry, width)
+		lines := renderThinkingLines(entry, width)
+		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
+			lines = append([]string{ts}, lines...)
+		}
+		return lines
 	case "system", "slash":
 		return splitRenderedBody(renderMarkdownForView(body, width))
 	case "user":
@@ -529,15 +533,22 @@ func (m chatModel) renderEntryLines(entry chatEntry, body string, width int) []s
 	case "compaction_summary":
 		return renderCompactionSummaryLines(entry, width)
 	case "tool":
-		if entryHasExpandableOutput(entry) {
-			return renderToolResultLines(entry, width)
+		var lines []string
+		if entryHasExpandableOutput(entry) || isToolResultStatus(entry.status) {
+			lines = renderToolResultLines(entry, width)
+		} else {
+			lines = wrapChatText(body, width)
 		}
-		if isToolResultStatus(entry.status) {
-			return renderToolResultLines(entry, width)
+		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
+			lines = append([]string{ts}, lines...)
 		}
-		return wrapChatText(body, width)
+		return lines
 	case "tool_group":
-		return renderToolGroupLines(entry, width)
+		lines := renderToolGroupLines(entry, width)
+		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
+			lines = append([]string{ts}, lines...)
+		}
+		return lines
 	default:
 		return wrapChatText(body, width)
 	}
@@ -793,7 +804,7 @@ func (m *chatModel) syncThinkingEntry(content string) {
 		if strings.TrimSpace(content) == "" {
 			return
 		}
-		m.entries = append(m.entries, newChatEntry(chatEntry{role: "thinking", status: "running"}))
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "thinking", status: "running", startedAt: time.Now()}))
 		idx = len(m.entries) - 1
 	}
 	m.entries[idx].content = content
@@ -1915,6 +1926,9 @@ func clamp(value, minValue, maxValue int) int {
 func newChatEntry(entry chatEntry) chatEntry {
 	if entry.version <= 0 {
 		entry.version = 1
+	}
+	if entry.role == "error" {
+		notifyErrorDot()
 	}
 	return entry
 }
