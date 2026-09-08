@@ -57,14 +57,11 @@ func TestChatViewRendersEmptyPromptHint(t *testing.T) {
 
 	view := stripANSI(m.View())
 	lines := strings.Split(view, "\n")
-	hintLine := lineIndexContaining(lines, "what changed on this branch?")
-	if hintLine < 0 {
-		t.Fatalf("empty chat view missing prompt hint: %q", view)
-	}
-	if strings.Contains(view, "Start a conversation. Use /help for commands.") {
-		t.Fatalf("empty chat view should use rotating prompt hint: %q", view)
+	if lineIndexContaining(lines, "Try asking the agent to inspect files, run tools, or explain a repo.") < 0 {
+		t.Fatalf("empty chat view missing neutral prompt hint: %q", view)
 	}
 }
+
 
 func TestChatUserEntryHasNoLabel(t *testing.T) {
 	m := chatModel{entries: []chatEntry{{role: "user", content: "hello"}}}

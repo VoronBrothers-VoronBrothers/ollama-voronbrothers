@@ -30,14 +30,7 @@ const (
 	idleWorkingDelayTicks     = 4
 )
 
-var chatEmptyPrompts = []string{
-	`read this repo and tell me where to start`,
-	`what changed on this branch?`,
-	`run the tests and summarize failures`,
-	`find the riskiest code path in this folder`,
-	`search the web and compare the latest docs with this implementation`,
-	`summarize this file and suggest edits`,
-}
+var chatEmptyPrompts = []string{}
 
 type ModelOption struct {
 	Name              string
