@@ -187,12 +187,16 @@ func cursorForItemName(items []SelectItem, name string, fallback int) int {
 }
 
 func (m selectorModel) filteredItems() []SelectItem {
-	if m.filter == "" {
-		return m.items
-	}
 	filterLower := strings.ToLower(m.filter)
 	var result []SelectItem
 	for _, item := range m.items {
+		if item.Recommended {
+			continue // hide "Recommended" models from the picker entirely (no-filter and filtered views)
+		}
+		if m.filter == "" {
+			result = append(result, item)
+			continue
+		}
 		if m.rankFiltered {
 			if selectItemMatchScore(item, filterLower).ok {
 				result = append(result, item)

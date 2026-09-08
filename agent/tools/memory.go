@@ -104,7 +104,7 @@ func (m *Memory) Execute(ctx context.Context, toolCtx agent.ToolContext, args ma
 
 func (m *Memory) append(dir, text string) (agent.ToolResult, error) {
 	now := time.Now()
-	dayDir := filepath.Join(dir, "stream")
+	dayDir := dir
 	if err := os.MkdirAll(dayDir, 0o755); err != nil {
 		return agent.ToolResult{}, err
 	}
