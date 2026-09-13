@@ -460,17 +460,8 @@ func agentModelOptions(ctx context.Context, client *api.Client) ([]agentchat.Mod
 		})
 	}
 
-	if disabled, known := agentCloudStatusDisabled(ctx, client); !known || !disabled {
-		if recs, err := client.ModelRecommendationsExperimental(ctx); err == nil {
-			for _, rec := range recs.Recommendations {
-				name := strings.TrimSpace(rec.Model)
-				if !modelref.HasExplicitCloudSource(name) {
-					continue
-				}
-				add(name, agentRecommendationDescription(rec), true, strings.TrimSpace(rec.RequiredPlan), true)
-			}
-		}
-	}
+	// [voron] skip recommended cloud models — show only local + already-listed items
+	_ = client
 
 	local := slices.Clone(list.Models)
 	slices.SortStableFunc(local, func(a, b api.ListModelResponse) int {
@@ -486,7 +477,7 @@ func agentModelOptions(ctx context.Context, client *api.Client) ([]agentchat.Mod
 			add(name, agentCloudModelDescription(model), false, "", true)
 			continue
 		}
-		add(name, agentLocalModelDescription(model), false, "", false)
+		add(name, "", false, "", false) // voron: no description for local — clean flat list
 	}
 
 	badges, signInURLs := cloudAvailabilityBadges(ctx, client, options)

@@ -101,7 +101,7 @@ func modelSelectorItemsWithCurrentPriority(models []ModelOption, current string,
 		items = append(items, apptui.SelectItem{
 			Name:              model.Name,
 			Description:       modelOptionMeta(model),
-			Recommended:       model.Name == current || !model.Cloud || model.Recommended,
+			Recommended:       false, // voron: no Recommended section — all local models flat
 			AvailabilityBadge: model.AvailabilityBadge,
 		})
 	}

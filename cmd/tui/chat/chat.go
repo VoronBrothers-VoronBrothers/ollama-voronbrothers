@@ -24,7 +24,7 @@ var chatRuntimeGOOS = runtime.GOOS
 
 const (
 	maxPickerItems            = 8
-	maxInlineModelPickerItems = 5
+	maxInlineModelPickerItems = 30
 	maxSlashCompletions       = 5
 	maxPromptHistory          = 50
 	idleWorkingDelayTicks     = 4

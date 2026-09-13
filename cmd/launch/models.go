@@ -23,12 +23,13 @@ import (
 )
 
 var recommendedModels = []ModelItem{
-	{Name: "kimi-k2.6:cloud", Description: "State-of-the-art coding, long-horizon execution, and multimodal agent swarm capability", Recommended: true, Details: api.ModelDetails{ContextLength: 262_144}, MaxOutputTokens: 262_144},
-	{Name: "qwen3.5:cloud", Description: "Reasoning, coding, and agentic tool use with vision", Recommended: true, Details: api.ModelDetails{ContextLength: 262_144}, MaxOutputTokens: 32_768},
-	{Name: "glm-5.1:cloud", Description: "Reasoning and code generation", Recommended: true, Details: api.ModelDetails{ContextLength: 202_752}, MaxOutputTokens: 131_072},
-	{Name: "minimax-m2.7:cloud", Description: "Fast, efficient coding and real-world productivity", Recommended: true, Details: api.ModelDetails{ContextLength: 204_800}, MaxOutputTokens: 128_000},
-	{Name: "gemma4", Description: "Reasoning and code generation locally", Recommended: true, VRAMBytes: 12 * format.GigaByte},
-	{Name: "qwen3.5", Description: "Reasoning, coding, and visual understanding locally", Recommended: true, VRAMBytes: 14 * format.GigaByte},
+	// voron: Recommended=false — no "Recommended" section header, flat list
+	{Name: "kimi-k2.6:cloud", Description: "State-of-the-art coding, long-horizon execution, and multimodal agent swarm capability", Recommended: false, Details: api.ModelDetails{ContextLength: 262_144}, MaxOutputTokens: 262_144},
+	{Name: "qwen3.5:cloud", Description: "Reasoning, coding, and agentic tool use with vision", Recommended: false, Details: api.ModelDetails{ContextLength: 262_144}, MaxOutputTokens: 32_768},
+	{Name: "glm-5.1:cloud", Description: "Reasoning and code generation", Recommended: false, Details: api.ModelDetails{ContextLength: 202_752}, MaxOutputTokens: 131_072},
+	{Name: "minimax-m2.7:cloud", Description: "Fast, efficient coding and real-world productivity", Recommended: false, Details: api.ModelDetails{ContextLength: 204_800}, MaxOutputTokens: 128_000},
+	{Name: "gemma4", Description: "Reasoning and code generation locally", Recommended: false, VRAMBytes: 12 * format.GigaByte},
+	{Name: "qwen3.5", Description: "Reasoning, coding, and visual understanding locally", Recommended: false, VRAMBytes: 14 * format.GigaByte},
 }
 
 func displayVRAM(vramBytes int64) string {
@@ -378,15 +379,8 @@ func buildModelListWithRecommendations(existing []modelInfo, recommendations []M
 		}
 	}
 
-	for _, rec := range recommendations {
-		if existingModels[rec.Name] || existingModels[rec.Name+":latest"] {
-			continue
-		}
-		items = append(items, rec)
-		if isCloudModelName(rec.Name) {
-			cloudModels[rec.Name] = true
-		}
-	}
+	// voron: не добавляем рекомендации, отсутствующие в инвентаре —
+	// пикер показывает только модели из `ollama list` (локальные + сохранённые cloud).
 
 	checked := make(map[string]bool, len(preChecked))
 	for _, n := range preChecked {
@@ -480,12 +474,18 @@ func buildModelListWithRecommendations(existing []modelInfo, recommendations []M
 		})
 	}
 
+	// voron: плоский пикер без описаний и раздела Recommended
+	for i := range items {
+		items[i].Description = ""
+		items[i].Recommended = false
+	}
+
 	return items, preChecked, existingModels, cloudModels
 }
 
 func copyModelRecommendationFields(name string, rec ModelItem) ModelItem {
 	rec.Name = name
-	rec.Recommended = true
+	rec.Recommended = false // voron: no Recommended section — flat list
 	return rec
 }
 

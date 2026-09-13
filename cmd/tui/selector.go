@@ -52,7 +52,7 @@ var (
 				Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "249"})
 )
 
-const maxSelectorItems = 10
+const maxSelectorItems = 10 // voron: минимум — только то что видно
 
 // ErrCancelled is returned when the user cancels the selection.
 var ErrCancelled = launch.ErrCancelled
@@ -190,9 +190,6 @@ func (m selectorModel) filteredItems() []SelectItem {
 	filterLower := strings.ToLower(m.filter)
 	var result []SelectItem
 	for _, item := range m.items {
-		if item.Recommended {
-			continue // hide "Recommended" models from the picker entirely (no-filter and filtered views)
-		}
 		if m.filter == "" {
 			result = append(result, item)
 			continue
@@ -493,9 +490,12 @@ func (m selectorModel) renderContent() string {
 		}
 
 		if len(otherItems) > 0 {
-			s.WriteString("\n")
-			s.WriteString(sectionHeaderStyle.Render("More"))
-			s.WriteString("\n")
+			// voron: заголовки секций показываем только при реальном разбиении на два раздела
+			if len(recItems) > 0 {
+				s.WriteString("\n")
+				s.WriteString(sectionHeaderStyle.Render("More"))
+				s.WriteString("\n")
+			}
 
 			maxOthers := maxSelectorItems - len(recItems)
 			if maxOthers < 3 {
@@ -1135,9 +1135,12 @@ func (m multiSelectorModel) View() string {
 		}
 
 		if len(otherItems) > 0 {
-			s.WriteString("\n")
-			s.WriteString(sectionHeaderStyle.Render("More"))
-			s.WriteString("\n")
+			// voron: заголовки секций показываем только при реальном разбиении на два раздела
+			if len(recItems) > 0 {
+				s.WriteString("\n")
+				s.WriteString(sectionHeaderStyle.Render("More"))
+				s.WriteString("\n")
+			}
 
 			maxOthers := maxSelectorItems - len(recItems)
 			if maxOthers < 3 {
