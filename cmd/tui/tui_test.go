@@ -105,8 +105,8 @@ func TestMenuRendersOnlyRunChoice(t *testing.T) {
 
 	view := menu.View()
 	for _, want := range []string{
-		"Chat, Code, & Work",
-		"Chat with models, code, search the web, and delegate real work",
+		"Chat with a model",
+		"Start an interactive chat with a model",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected menu view to contain %q\n%s", want, view)
