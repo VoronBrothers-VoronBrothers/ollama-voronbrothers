@@ -2,10 +2,15 @@ package readline
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type Prompt struct {
@@ -43,6 +48,10 @@ type Instance struct {
 	Pasting     bool
 	Prefill     string
 	pastedLines []string
+
+	// AutoSendDuration: if text in input remains unchanged for this duration, auto-submit (0 = disabled).
+	AutoSendDuration time.Duration
+	lastChangeTime   time.Time
 }
 
 func New(prompt Prompt) (*Instance, error) {
@@ -74,6 +83,15 @@ func (i *Instance) Readline() (string, error) {
 		i.Terminal.termios = termios
 	}
 
+	fdl := os.Stdin.Fd()
+	autoSendActive := i.AutoSendDuration > 0 && IsTerminal(fdl)
+	var oldFl int = -1
+	if autoSendActive {
+		oldFl, _ = unix.FcntlInt(fdl, unix.F_GETFL, 0)
+		_, _ = unix.FcntlInt(fdl, unix.F_SETFL, oldFl|unix.O_NONBLOCK)
+	}
+	i.lastChangeTime = time.Now()
+
 	prompt := i.Prompt.prompt()
 	if i.Pasting {
 		// force alt prompt when pasting
@@ -83,6 +101,9 @@ func (i *Instance) Readline() (string, error) {
 
 	defer func() {
 		fd := os.Stdin.Fd()
+		if autoSendActive && oldFl >= 0 {
+			_, _ = unix.FcntlInt(fd, unix.F_SETFL, oldFl)
+		}
 		//nolint:errcheck
 		UnsetRawMode(fd, i.Terminal.termios)
 		i.Terminal.rawmode = false
@@ -155,8 +176,26 @@ func (i *Instance) Readline() (string, error) {
 		}
 
 		if err != nil {
+			if autoSendActive && errors.Is(err, ErrNoData) {
+				output := buf.String()
+				promptText := i.Prompt.prompt()
+				if len(output) > 0 && output != promptText && !i.Pasting && len(i.pastedLines) == 0 &&
+					time.Since(i.lastChangeTime) >= i.AutoSendDuration {
+					// Auto-send triggered: text unchanged for long enough
+					output = strings.TrimSpace(output)
+					if output != "" {
+						i.History.Add(output)
+					}
+					fmt.Println()
+					i.Prompt.UseAlt = false
+					return output, nil
+				}
+				time.Sleep(100 * time.Millisecond) // don't busy-wait on empty read
+				continue
+			}
 			return "", io.EOF
 		}
+		i.lastChangeTime = time.Now() // reset idle timer on any keypress
 
 		if escex {
 			escex = false
@@ -386,6 +425,10 @@ func NewTerminal() (*Terminal, error) {
 func (t *Terminal) Read() (rune, error) {
 	r, _, err := t.reader.ReadRune()
 	if err != nil {
+		var errno syscall.Errno
+		if errors.As(err, &errno) && (errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK) {
+			return 0, ErrNoData
+		}
 		return 0, err
 	}
 	return r, nil

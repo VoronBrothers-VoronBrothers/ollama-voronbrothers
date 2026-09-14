@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -67,6 +69,7 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 		fmt.Fprintln(os.Stderr, "  /set quiet             Disable LLM stats")
 		fmt.Fprintln(os.Stderr, "  /set think             Enable thinking")
 		fmt.Fprintln(os.Stderr, "  /set nothink           Disable thinking")
+		fmt.Fprintln(os.Stderr, "  /set autosend <sec>    Auto-send after N sec idle (0=off)")
 		fmt.Fprintln(os.Stderr, "")
 	}
 
@@ -363,6 +366,23 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 				case "noformat":
 					opts.Format = ""
 					fmt.Println("Disabled format.")
+				case "autosend":
+					if len(args) < 3 {
+						secs := int64(120)
+						scanner.AutoSendDuration = time.Duration(secs) * time.Second
+						fmt.Printf("Auto-send enabled: %d sec idle.\n", secs)
+					} else {
+						n, err := strconv.Atoi(args[2])
+						if err != nil || n < 0 {
+							fmt.Println("Usage: /set autosend <seconds> (0 to disable)")
+						} else if n == 0 {
+							scanner.AutoSendDuration = 0
+							fmt.Println("Auto-send disabled.")
+						} else {
+							scanner.AutoSendDuration = time.Duration(n) * time.Second
+							fmt.Printf("Auto-send enabled: %d sec idle.\n", n)
+						}
+					}
 				case "parameter":
 					if len(args) < 4 {
 						usageParameters()

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -62,6 +63,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/bye", description: "exit", aliases: []string{"/exit"}},
 	{name: "/prompt", description: "show full prompt, tools, and messages", aliases: []string{"/промт"}},
 	{name: "/очисточередь", description: "clear queued prompts"},
+	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
 }
 
@@ -108,6 +110,7 @@ func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {
 		m.input = nil
 		m.inputCursor = 0
 		m.inputCursorSet = false
+		m.autoSendDirty = false
 		return *m, nil
 	}
 
@@ -116,6 +119,7 @@ func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {
 	m.input = nil
 	m.inputCursor = 0
 	m.inputCursorSet = false
+	m.autoSendDirty = false
 	m.inputAttachments = attachments
 	m.inputPastedTexts = pastedTexts
 	m.complete = 0
@@ -180,6 +184,34 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 	case command == "/очисточередь":
 		m.pendingPrompts = nil
 		m.status = "ready"
+		return *m, nil
+	case strings.HasPrefix(command, "/время"):
+		fields := strings.Fields(input)
+		if len(fields) == 1 {
+			// Toggle on/off; default ON = 120s
+			if m.autoSendDuration > 0 {
+				m.autoSendDuration = 0
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Автоотправка выключена"}))
+			} else {
+				m.autoSendDuration = 120 * time.Second
+				m.lastInputAt = time.Now()
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Автоотправка включена: 120 с"}))
+			}
+		} else {
+			n, err := strconv.Atoi(fields[1])
+			if err != nil || n < 0 {
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Некорректное время. Использование: /время <секунды>"}))
+				return *m, nil
+			}
+			if n == 0 {
+				m.autoSendDuration = 0
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Автоотправка выключена"}))
+			} else {
+				m.autoSendDuration = time.Duration(n) * time.Second
+				m.lastInputAt = time.Now()
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Автоотправка включена: %d с", n)}))
+			}
+		}
 		return *m, nil
 	case command == "/prompt":
 		return m.handlePromptCommand(args)
@@ -444,6 +476,7 @@ func (m *chatModel) movePromptHistory(delta int) bool {
 			m.inputAttachments = nil
 			m.inputPastedTexts = nil
 			m.resetPromptHistoryCursor()
+		m.markInputChange()
 			m.complete = 0
 			return true
 		}
@@ -462,6 +495,7 @@ func (m *chatModel) movePromptHistory(delta int) bool {
 	m.inputCursorSet = true
 	m.inputAttachments = nil
 	m.complete = 0
+	m.markInputChange()
 	return true
 }
 
@@ -573,6 +607,14 @@ func (m *chatModel) insertInputRunes(runes []rune) {
 	m.inputCursor = cursor + len(runes)
 	m.inputCursorSet = true
 	m.complete = 0
+	m.markInputChange()
+}
+
+func (m *chatModel) markInputChange() {
+	if m.autoSendDuration > 0 && len(m.input) > 0 {
+		m.lastInputAt = time.Now()
+		m.autoSendDirty = true
+	}
 }
 
 func normalizeInputRunes(runes []rune) []rune {
@@ -643,6 +685,11 @@ func (m *chatModel) deleteInputRange(start, end int) {
 	m.inputCursorSet = true
 	m.complete = 0
 	m.syncInputPlaceholders()
+	if len(m.input) == 0 {
+		m.autoSendDirty = false
+	} else {
+		m.markInputChange()
+	}
 }
 
 func (m chatModel) placeholderRangeForBackspace(cursor int) (int, int, bool) {

@@ -155,6 +155,9 @@ type chatModel struct {
 	quitArmedKey       string
 	escArmed           bool
 	eventErrorRendered bool
+	autoSendDuration   time.Duration
+	lastInputAt        time.Time
+	autoSendDirty      bool
 	err                error
 }
 
@@ -220,8 +223,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		workingDir:      opts.WorkingDir,
 		approvalState:   approvalState,
 		defaultAllowAll: opts.AllowAllTools,
-		promptHistory:   initialPromptHistory(ctx, opts),
-		status:          "ready",
+		autoSendDuration: 120 * time.Second,
+		promptHistory:    initialPromptHistory(ctx, opts),
+		status:           "ready",
 		openModelOnInit: opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
 	}
 	m.nextImageID, m.nextAudioID = nextInputAttachmentIDsFromMessages(m.messages)
@@ -292,6 +296,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatTickMsg:
 		m.tickActive = false
 		if !m.running && !m.compacting && m.preloadingModel == "" {
+			if m.autoSendDirty && m.autoSendDuration > 0 {
+				if time.Since(m.lastInputAt) >= m.autoSendDuration {
+					return m.handleSubmit()
+				}
+				cmd := m.scheduleTick()
+				return m, cmd
+			}
 			return m, nil
 		}
 		m.spinner++
@@ -717,6 +728,10 @@ func (m chatModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !msg.Alt || !m.handleInputAltRunes(msg.Runes) {
 			m.insertInputRunesFromKey(msg.Runes, msg.Paste)
 		}
+	}
+	// Schedule a tick if auto-send is waiting and no tick active yet
+	if m.autoSendDirty && !m.tickActive && m.autoSendDuration > 0 {
+		return m, m.scheduleTick()
 	}
 	return m, nil
 }
