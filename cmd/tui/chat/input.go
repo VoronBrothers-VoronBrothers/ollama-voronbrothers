@@ -188,14 +188,14 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 	case strings.HasPrefix(command, "/время"):
 		fields := strings.Fields(input)
 		if len(fields) == 1 {
-			// Toggle on/off; default ON = 120s
+			// Toggle on/off; default ON = 15s пользователь исправил на 15
 			if m.autoSendDuration > 0 {
 				m.autoSendDuration = 0
 				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Автоотправка выключена"}))
 			} else {
-				m.autoSendDuration = 120 * time.Second
+				m.autoSendDuration = 15 * time.Second
 				m.lastInputAt = time.Now()
-				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Автоотправка включена: 120 с"}))
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Автоотправка включена: 15 с"}))
 			}
 		} else {
 			n, err := strconv.Atoi(fields[1])

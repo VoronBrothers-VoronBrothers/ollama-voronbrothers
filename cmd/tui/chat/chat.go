@@ -23,9 +23,9 @@ var chatSpinnerFrames = []string{".", "..", "..."}
 var chatRuntimeGOOS = runtime.GOOS
 
 const (
-	maxPickerItems            = 8
+	maxPickerItems            = 12
 	maxInlineModelPickerItems = 30
-	maxSlashCompletions       = 5
+	maxSlashCompletions       = 8
 	maxPromptHistory          = 50
 	idleWorkingDelayTicks     = 4
 )
@@ -223,7 +223,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		workingDir:      opts.WorkingDir,
 		approvalState:   approvalState,
 		defaultAllowAll: opts.AllowAllTools,
-		autoSendDuration: 120 * time.Second,
+		autoSendDuration: 15 * time.Second,
 		promptHistory:    initialPromptHistory(ctx, opts),
 		status:           "ready",
 		openModelOnInit: opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),

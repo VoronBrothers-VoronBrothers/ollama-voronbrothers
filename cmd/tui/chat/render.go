@@ -344,21 +344,27 @@ func (m chatModel) renderModelStatusLines(width int) []string {
 	if notice := m.permissionModeNotice(); notice != "" {
 		parts = append(parts, notice)
 	}
-	if len(parts) == 0 {
-		return nil
-	}
+
 	indent := inputBoxTextIndent()
-	lines := wrapChatText(strings.Join(parts, "   "), max(20, width-lipgloss.Width(indent)))
-	for i := range lines {
-		lines[i] = renderFooterPlainLine(indent + lines[i])
+	var lines []string
+	if len(parts) > 0 {
+		for _, line := range wrapChatText(strings.Join(parts, "   "), max(20, width-lipgloss.Width(indent))) {
+			lines = append(lines, renderFooterPlainLine(indent+line))
+		}
 	}
+
+	// Model-activity indicator: rendered in this same footer area (below the input field,
+	// next to "model name … full access enabled") so it is always visible while working.
+	if activity := m.activityLine(); activity != "" {
+		lines = append(lines, chatMetaStyle.Render(indent+activity))
+	}
+
 	return lines
 }
 
 func (m chatModel) renderActionStatusLines(width int) []string {
-	if activity := m.activityLine(); activity != "" {
-		return []string{chatMetaStyle.Render(inputBoxTextIndent() + activity)}
-	}
+	// The model-activity indicator now lives in the footer below the input field
+	// (see renderModelStatusLines); this region keeps transient notifications only.
 	if notificationLines := m.renderNotificationLines(width); len(notificationLines) > 0 {
 		return notificationLines
 	}
@@ -1553,42 +1559,95 @@ func (m chatModel) currentWorkingDir() string {
 	return m.opts.WorkingDir
 }
 
+// activityLine is the always-on model-activity indicator. It returns an empty string only when
+// nothing is actually in flight (a clean idle state or a modal owning the screen); while the model
+// is running, compacting, loading or being canceled it always yields a spinner + label so the user
+// can tell "working" from "stopped/errored" at a glance.
 func (m chatModel) activityLine() string {
-	if m.approvalPrompt != nil {
+	if m.approvalPrompt != nil || m.cloudAuthPrompt != nil {
 		return ""
 	}
-	if m.preloadingModel != "" && !m.running && !m.compacting {
+	switch {
+	case m.status == "canceling":
+		return statusWithSpinner(m.spinnerFrame(), "Canceling")
+	case m.compacting:
+		label := "Compacting"
+		if m.compactingTokens > 0 {
+			label = "Compacting ↓ " + formatTokenCount(m.compactingTokens)
+		}
+		return statusWithSpinner(m.spinnerFrame(), label)
+	case !m.running && m.preloadingModel != "":
+		// Loading/switching a model outside an active run: keep progress visible so the
+		// screen never looks frozen while work is in flight.
+		label := "Loading"
+		if name := strings.TrimSpace(m.preloadingModel); name != "" {
+			label = "Loading " + name
+		}
+		return statusWithSpinner(m.spinnerFrame(), label)
+	case !m.running:
+		// Terminal / idle. A non-blank m.status (e.g. "error", "queued") is surfaced by the
+		// notification path; a clean finish stays quiet so an empty footer reads as idle.
 		return ""
 	}
-	if !m.running && !m.compacting && m.preloadingModel == "" && m.approvalPrompt == nil {
-		return ""
-	}
+
+	// While an expanded running-thinking entry is visible in the transcript it already carries the
+	// "Thinking" label; keep a single source of truth and don't repeat it in the footer.
 	if m.thinking && len(m.entries) > 0 {
-		entry := m.entries[len(m.entries)-1]
-		if entry.role == "thinking" && entry.status == "running" {
+		last := m.entries[len(m.entries)-1]
+		if last.role == "thinking" && last.status == "running" {
 			return ""
 		}
 	}
-	label := m.activityLabel()
-	if label == "" {
-		if m.awaitingToolStart() {
-			return statusWithSpinner(m.spinnerFrame(), "Working")
+
+	label := m.activityLabel() // Thinking label, or "" while a tool/assistant owns the view.
+	if label != "" {
+		if m.thinking {
+			// The token counter already conveys progress; avoid cluttering with spinner dots.
+			return label
 		}
-		if m.awaitingModel {
-			return statusWithSpinner(m.spinnerFrame(), "Working")
-		}
-		if !m.waitingForModel() || m.spinner < idleWorkingDelayTicks {
-			return ""
-		}
-		if m.preloadingModel != "" {
-			return statusWithSpinner(m.spinnerFrame(), "Working")
-		}
-		return statusWithSpinner(m.spinnerFrame(), "Working")
+		return statusWithSpinner(m.spinnerFrame(), label)
 	}
-	if m.thinking {
-		return label
+	if m.hasRunningToolEntry() {
+		// An active tool row already animates its own progress line; avoid a redundant indicator.
+		return ""
 	}
-	return statusWithSpinner(m.spinnerFrame(), label)
+	if m.isStreamingAssistantText() && !m.awaitingModel && m.spinner < idleWorkingDelayTicks {
+		// Actively writing visible text: stay quiet until the stream idles for a few ticks.
+		return ""
+	}
+	return statusWithSpinner(m.spinnerFrame(), "Working")
+}
+
+func (m chatModel) hasRunningToolEntry() bool {
+	start := m.currentTurnEntryStart()
+	for i := len(m.entries) - 1; i >= start; i-- {
+		entry := m.entries[i]
+		switch entry.role {
+		case "tool":
+			if isToolActiveStatus(entry.status) {
+				return true
+			}
+		case "tool_group":
+			if entryHasActiveTool(entry) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m chatModel) isStreamingAssistantText() bool {
+	start := m.currentTurnEntryStart()
+	for i := len(m.entries) - 1; i >= start; i-- {
+		entry := m.entries[i]
+		switch entry.role {
+		case "assistant":
+			return strings.TrimSpace(entry.content) != "" && !m.thinking
+		case "tool", "tool_group":
+			return false // a tool owns the view, not assistant text.
+		}
+	}
+	return false
 }
 
 func (m chatModel) activityLabel() string {

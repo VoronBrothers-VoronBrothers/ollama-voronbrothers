@@ -556,10 +556,19 @@ func TestChatViewKeepsInputBoxWhileRunning(t *testing.T) {
 	if borderLine < 0 {
 		t.Fatalf("view missing input box: %q", view)
 	}
-	if borderLine < 1 || !strings.Contains(lines[borderLine-1], "Thinking ↓ 42 tokens") {
-		t.Fatalf("thinking line should sit directly above input box:\n%s", view)
+	// The thinking indicator now lives in the model-status footer, i.e. BELOW the input box,
+	// so a user can always see whether the model is working while typing.
+	idx := -1
+	for i := borderLine + 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], "Thinking ↓ 42 tokens") {
+			idx = i
+			break
+		}
 	}
-	if strings.Contains(lines[borderLine-1], "...") {
+	if idx < 0 {
+		t.Fatalf("thinking line should appear in the footer below the input box:\n%s", view)
+	}
+	if strings.Contains(lines[idx], "...") {
 		t.Fatalf("thinking line should not show spinner dots:\n%s", view)
 	}
 }
