@@ -349,14 +349,26 @@ func (m chatModel) renderModelStatusLines(width int) []string {
 	var lines []string
 	if len(parts) > 0 {
 		for _, line := range wrapChatText(strings.Join(parts, "   "), max(20, width-lipgloss.Width(indent))) {
+			// Model-activity indicator: appended right-aligned as a separate column on the
+			// same footer line (below the input field), so it never adds an extra row that
+			// could be clipped off-screen. Padding is computed before styling.
+			if activity := m.activityLine(); activity != "" {
+				gap := width - lipgloss.Width(indent) - lipgloss.Width(line) - lipgloss.Width(activity)
+				if gap < 1 {
+					line += " " + activity
+				} else {
+					line += strings.Repeat(" ", gap) + activity
+				}
+			}
 			lines = append(lines, renderFooterPlainLine(indent+line))
 		}
 	}
 
-	// Model-activity indicator: rendered in this same footer area (below the input field,
-	// next to "model name … full access enabled") so it is always visible while working.
-	if activity := m.activityLine(); activity != "" {
-		lines = append(lines, chatMetaStyle.Render(indent+activity))
+	// No model footer (empty model name / picker open): keep a standalone indicator row.
+	if len(lines) == 0 {
+		if activity := m.activityLine(); activity != "" {
+			lines = append(lines, chatMetaStyle.Render(indent+activity))
+		}
 	}
 
 	return lines
