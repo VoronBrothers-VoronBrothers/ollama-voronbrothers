@@ -249,11 +249,11 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	registry := &coreagent.Registry{}
 	if os.Getenv("OLLAMA_AGENT_DISABLE_SHELL") == "" {
 		registry.Register(&agenttools.Bash{})
+		registry.Register(agenttools.NewBashLong())
 	}
 	registry.Register(&agenttools.Read{})
 	registry.Register(&agenttools.Edit{})
 	registry.Register(&agenttools.Write{})
-	registry.Register(&agenttools.Memory{})
 	if len(skillCatalog.List()) > 0 {
 		registry.Register(&agenttools.Skill{Catalog: skillCatalog})
 	}

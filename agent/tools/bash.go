@@ -18,11 +18,26 @@ import (
 
 const (
 	bashTimeout        = 40 * time.Second
+	// bashLongTimeout is the extended deadline for the parallel `bash_long` tool,
+	// meant to wait on long-running commands (GPU training, big downloads).
+	bashLongTimeout    = 600 * time.Second // 10 minutes
 	bashWaitDelay      = 1 * time.Second
 	maxBashOutputBytes = 60_000
 )
 
-type Bash struct{}
+// Timeout overrides the default bashTimeout for this instance when set.
+// A zero value (the normal `&Bash{}`) keeps the short 40s deadline.
+type Bash struct {
+	Timeout time.Duration
+}
+
+// effectiveTimeout returns the configured timeout, or the short default when unset.
+func (b *Bash) effectiveTimeout() time.Duration {
+	if b.Timeout > 0 {
+		return b.Timeout
+	}
+	return bashTimeout
+}
 
 func (b *Bash) Name() string {
 	return shellToolName()
@@ -79,7 +94,8 @@ func (b *Bash) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[
 		return agent.ToolResult{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, bashTimeout)
+	t := b.effectiveTimeout()
+	ctx, cancel := context.WithTimeout(ctx, t)
 	defer cancel()
 
 	cwdFile, err := os.CreateTemp("", "ollama-agent-cwd-*")
@@ -122,7 +138,7 @@ func (b *Bash) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return agent.ToolResult{Content: bashContentWithError(sb.String(), "Error: command timed out after "+bashTimeout.String()), WorkingDir: finalWorkingDir}, nil
+			return agent.ToolResult{Content: bashContentWithError(sb.String(), "Error: command timed out after "+t.String()), WorkingDir: finalWorkingDir}, nil
 		}
 		if ctx.Err() == context.Canceled {
 			return agent.ToolResult{Content: bashContentWithError(sb.String(), "Error: command was canceled"), WorkingDir: finalWorkingDir}, nil
