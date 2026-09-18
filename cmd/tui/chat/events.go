@@ -84,6 +84,14 @@ func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 			} else {
 				m.thinkingTokens += approximateTokenCount(event.Thinking)
 			}
+			// runThinkingTokens survives the per-delta reset done by
+			// EventMessageDelta, so it still holds this run's thinking total
+			// at stop time.
+			if event.Tokens > 0 {
+				m.runThinkingTokens = max(m.runThinkingTokens, event.Tokens)
+			} else {
+				m.runThinkingTokens += approximateTokenCount(event.Thinking)
+			}
 			idx := m.ensureLiveAssistantMessage()
 			if !m.thinking {
 				m.thinkingPhaseStart = len(m.liveMessages[idx].Thinking)

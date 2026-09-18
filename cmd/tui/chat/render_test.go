@@ -2277,3 +2277,31 @@ func TestRenderMarkdownTablePreservesValidSeparator(t *testing.T) {
 		t.Fatalf("valid Markdown table was not rendered:\n%s", plain)
 	}
 }
+
+func TestTokensNoteFromResponse(t *testing.T) {
+	resp := api.ChatResponse{DoneReason: "stop", Metrics: api.Metrics{PromptEvalCount: 100, EvalCount: 7}}
+	if got := tokensNoteFromResponse(resp, false, 0); got != "остановка: спец-символ • prompt 100 • out 7" {
+		t.Fatalf("note = %q", got)
+	}
+	var cached int = 42
+	resp.PromptEvalCachedCount = &cached
+	if got := tokensNoteFromResponse(resp, false, 0); !strings.Contains(got, "кэш 42") {
+		t.Fatalf("note = %q", got)
+	}
+	// thinking phase completed normally: count shown, no truncation marker.
+	resp2 := api.ChatResponse{DoneReason: "stop", Metrics: api.Metrics{PromptEvalCount: 100, EvalCount: 7}}
+	if got := tokensNoteFromResponse(resp2, false, 512); !strings.Contains(got, "разм. 512") || strings.Contains(got, "оборваны") {
+		t.Fatalf("note = %q", got)
+	}
+	// thinking was still running when a length limit stopped generation.
+	resp3 := api.ChatResponse{DoneReason: "length", Metrics: api.Metrics{PromptEvalCount: 100, EvalCount: 900}}
+	if got := tokensNoteFromResponse(resp3, true, 800); !strings.Contains(got, "разм. 800 (оборваны)") || !strings.Contains(got, "остановка: лимит длины") {
+		t.Fatalf("note = %q", got)
+	}
+	if got := stopReasonLabel("length"); got != "остановка: лимит длины" {
+		t.Fatalf("label = %q", got)
+	}
+	if got := stopReasonLabel(""); got != "остановка: —" {
+		t.Fatalf("label = %q", got)
+	}
+}

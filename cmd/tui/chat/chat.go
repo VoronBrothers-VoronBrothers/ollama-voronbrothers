@@ -122,9 +122,11 @@ type chatModel struct {
 	thinking            bool
 	thinkingPhaseStart  int
 	thinkingTokens      int
+	runThinkingTokens   int
 	compactingTokens    int
 	contextTokens       int
 	contextEstimate     bool
+	tokensMode          bool
 	modelPicker         *chatModelPicker
 	modelPickerModels   []ModelOption
 	thinkPicker         *chatThinkPicker
@@ -227,6 +229,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		promptHistory:    initialPromptHistory(ctx, opts),
 		status:           "ready",
 		openModelOnInit: opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
+		tokensMode: true,
 	}
 	m.nextImageID, m.nextAudioID = nextInputAttachmentIDsFromMessages(m.messages)
 	m.nextPastedTextID = nextInputPastedTextIDFromMessages(m.messages)
@@ -374,6 +377,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatRunDoneMsg:
 		wasCanceling := m.status == "canceling"
+		// capture thinking-phase state before it is reset below, so the
+		// token note can say whether reasoning was still running at stop.
+		wasThinking := m.thinking
+		thinkingTokens := m.runThinkingTokens
 		m.finishThinkingEntry()
 		m.running = false
 		m.awaitingModel = false
@@ -397,6 +404,17 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.contextEstimate = true
 			if !messagesEndWithCompactionResult(m.messages) {
 				m.applyResponseMetrics(&msg.result.Latest)
+			}
+			if m.tokensMode {
+				if note := tokensNoteFromResponse(msg.result.Latest, wasThinking, thinkingTokens); note != "" {
+					for i := len(m.entries) - 1; i >= 0; i-- {
+						if m.entries[i].role == "assistant" {
+							m.entries[i].tokensNote = note
+							m.markEntryDirty(i)
+							break
+						}
+					}
+				}
 			}
 		}
 		if msg.result == nil {
@@ -1064,6 +1082,7 @@ func (m *chatModel) resetChat(status string) (tea.Model, tea.Cmd) {
 	m.permissionNotice = ""
 	m.thinking = false
 	m.thinkingTokens = 0
+	m.runThinkingTokens = 0
 	m.contextTokens = 0
 	m.contextEstimate = true
 	m.scroll = 0
@@ -1208,6 +1227,7 @@ func (m *chatModel) startRunWithMessages(displayInput, historyInput string, newM
 	m.detectedToolCalls = nil
 	m.thinking = false
 	m.thinkingTokens = 0
+	m.runThinkingTokens = 0
 	m.eventErrorRendered = false
 	systemPrompt := m.systemPrompt(extraSystemPrompt)
 	m.liveMessages = append(slices.Clone(m.messages), newMessages...)

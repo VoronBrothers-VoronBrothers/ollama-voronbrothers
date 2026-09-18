@@ -35,6 +35,7 @@ type chatEntry struct {
 	tools      []chatEntry
 	metrics    *api.Metrics
 	tokenCount int
+	tokensNote string
 
 	version     int
 	renderKey   chatEntryRenderKey
@@ -512,6 +513,9 @@ func (m chatModel) renderEntryLines(entry chatEntry, body string, width int) []s
 		innerWidth := max(1, width-lipgloss.Width(chatMessageIndent))
 		lines := indentLines(splitRenderedBody(renderMarkdownForView(body, innerWidth)), chatMessageIndent)
 		lines = append(lines, indentLines(renderMetricsLines(entry.metrics, innerWidth), chatMessageIndent)...)
+		if entry.tokensNote != "" {
+			lines = append(lines, chatMessageIndent+chatMetaStyle.Render("⏹ "+entry.tokensNote))
+		}
 		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
 			lines = append([]string{ts}, lines...)
 		}
@@ -641,6 +645,48 @@ func metricsEmpty(metrics api.Metrics) bool {
 		metrics.PromptEvalDuration <= 0 &&
 		metrics.EvalCount <= 0 &&
 		metrics.EvalDuration <= 0
+}
+
+// tokensNoteFromResponse builds the token-mode status line: why generation
+// stopped plus the real prompt/output token counts from the final response.
+// wasThinking/thinkingTokens describe whether reasoning (thinking phase)
+// was still running at stop time and how many thinking tokens it consumed:
+// "разм. N" is appended when thinking happened, with "(оборваны)" when a
+// length limit cut it off mid-reasoning.
+func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkingTokens int) string {
+	parts := []string{stopReasonLabel(response.DoneReason)}
+	if response.PromptEvalCount > 0 {
+		line := fmt.Sprintf("prompt %d", response.PromptEvalCount)
+		if cached := response.PromptEvalCachedCount; cached != nil && *cached > 0 {
+			line += fmt.Sprintf(" (кэш %d)", *cached)
+		}
+		parts = append(parts, line)
+	}
+	if response.EvalCount > 0 {
+		parts = append(parts, fmt.Sprintf("out %d", response.EvalCount))
+	}
+	if thinkingTokens > 0 {
+		line := fmt.Sprintf("разм. %d", thinkingTokens)
+		if wasThinking && response.DoneReason == "length" {
+			line += " (оборваны)"
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, " • ")
+}
+
+func stopReasonLabel(reason string) string {
+	switch reason {
+	case "stop":
+		return "остановка: спец-символ"
+	case "length":
+		return "остановка: лимит длины"
+	default:
+		if strings.TrimSpace(reason) != "" {
+			return "остановка: " + strings.TrimSpace(reason)
+		}
+		return "остановка: —"
+	}
 }
 
 func historyRoleStyle(role string) lipgloss.Style {

@@ -61,9 +61,10 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/compact", description: "summarize older context"},
 	{name: "/help", description: "show commands", aliases: []string{"/?"}},
 	{name: "/bye", description: "exit", aliases: []string{"/exit"}},
-	{name: "/prompt", description: "show full prompt, tools, and messages", aliases: []string{"/промт"}},
-	{name: "/очисточередь", description: "clear queued prompts"},
+	{name: "/prompt", description: "show full prompt, tools, and messages", aliases: []string{"/промт", "/промпт"}},
+	{name: "/очисточередь", description: "clear queued prompts", aliases: []string{"/clear"}},
 	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
+	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
 }
 
@@ -213,6 +214,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 			}
 		}
 		return *m, nil
+	case command == "/token":
+		return m.handleTokenToggleCommand(args)
 	case command == "/prompt":
 		return m.handlePromptCommand(args)
 	case command == "/save":
@@ -1191,23 +1194,23 @@ func trimInputPromptPrefix(line string) string {
 }
 
 func inputBoxTopBorderLine(width int) string {
-	return inputBoxBorderLine(width, "╭", "╮")
+	return inputBoxBorderLine(width, "", "")
 }
 
 func inputBoxBottomBorderLine(width int) string {
-	return inputBoxBorderLine(width, "╰", "╯")
+	return inputBoxBorderLine(width, "", "")
 }
 
 func inputBoxBorderLine(width int, left, right string) string {
 	if width < 4 {
 		width = 4
 	}
-	return left + strings.Repeat("─", max(0, width-2)) + right
+	return left + strings.Repeat("", max(0, width-2)) + right
 }
 
 func renderInputBoxBodyLine(line string, width int) string {
 	padding := strings.Repeat(" ", inputBoxHorizontalPadding)
-	return chatInputBorderStyle.Render("│") + padding + padRenderedLine(line, width) + padding + chatInputBorderStyle.Render("│")
+	return chatInputBorderStyle.Render(">>") + padding + padRenderedLine(line, width) + padding + chatInputBorderStyle.Render("<<")
 }
 
 func padRenderedLine(line string, width int) string {

@@ -48,6 +48,19 @@ func (m *chatModel) handleSaveCommand(args string) (tea.Model, tea.Cmd) {
 	return *m, nil
 }
 
+func (m *chatModel) handleTokenToggleCommand(args string) (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(args) != "" {
+		return m.addDebugError(fmt.Errorf("usage: /token"))
+	}
+	m.tokensMode = !m.tokensMode
+	if m.tokensMode {
+		m.entries = append(m.entries, newSlashEntry("режим /token включён — под репликами будет причина остановки и счётчики токенов"))
+	} else {
+		m.entries = append(m.entries, newSlashEntry("режим /token выключен"))
+	}
+	return *m, nil
+}
+
 func (m *chatModel) handlePromptCommand(args string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(args) != "" {
 		return m.addDebugError(fmt.Errorf("usage: /prompt"))

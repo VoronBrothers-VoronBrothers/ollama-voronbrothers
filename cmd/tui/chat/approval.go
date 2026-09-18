@@ -75,6 +75,7 @@ func (m *chatModel) openApprovalPrompt(msg chatApprovalPromptMsg) {
 	m.status = "approval required"
 	m.thinking = false
 	m.thinkingTokens = 0
+	m.runThinkingTokens = 0
 	m.upsertApprovalToolEntries(msg.request)
 }
 
