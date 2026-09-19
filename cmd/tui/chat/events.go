@@ -105,14 +105,25 @@ func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 		m.resetStreamingState()
 		m.spinner = 0
 		m.detectedToolCalls = nil
+		// runOutputText accumulates assistant text of every round in this run
+		// (intermediate reports included). Thinking deltas and tool calls are
+		// separate events, so they never enter these counters. outputTokens is
+		// the same count scoped to the single assistant message being streamed.
 		idx := m.ensureAssistantEntry()
+		m.runOutputText += event.Content
 		m.entries[idx].content += event.Content
+		m.entries[idx].outputTokens += approximateTokenCount(event.Content)
+		// Live output counter next to the streaming message (like "Thinking ↓ N").
+		m.entries[idx].label = messageActivityLabel(m.entries[idx].outputTokens)
 		m.markEntryDirty(idx)
 		msgIdx := m.ensureLiveAssistantMessage()
 		m.liveMessages[msgIdx].Content += event.Content
 		contextChanged = true
 	case coreagent.EventToolCallDetected:
 		m.finishThinkingEntry()
+		// The text block of this round is closed once the tool calls are detected,
+		// so freeze its live "out ↓ N" counter into the final number.
+		m.finalizeMessageLabel(len(m.entries) - 1)
 		m.awaitingModel = m.running
 		m.thinking = false
 		m.thinkingTokens = 0

@@ -519,7 +519,7 @@ func (m selectorModel) renderContent() string {
 	}
 
 	s.WriteString("\n")
-	help := "↑/↓ navigate • enter select • ← back"
+	help := "• ↑/↓ or PageUp/PageDown navigate • enter select • ← or Ctrl + C back "
 	if m.helpText != "" {
 		help = m.helpText
 	}

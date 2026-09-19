@@ -46,8 +46,8 @@ type menuItem struct {
 }
 
 var runModelMenuItem = menuItem{
-	title:       "Chat with a model",
-	description: "Start an interactive chat with a model",
+	title:       "Working and interacting with a model",
+	description: "If you need a model for testing, use either the CPU-assistant or the orchestrator that is already loaded",
 	isRunModel:  true,
 }
 
@@ -254,13 +254,13 @@ func (m model) View() string {
 		return ""
 	}
 
-	s := selectorTitleStyle.Render("Ollama "+versionStyle.Render(version.Version)) + "\n\n"
+	s := selectorTitleStyle.Render("Ollama TUI "+versionStyle.Render(version.Version)) + "\n\n"
 
 	for i, item := range m.items {
 		s += m.renderMenuItem(i, item)
 	}
 
-	s += "\n" + selectorHelpStyle.Render("↑/↓ navigate • enter launch • → configure • esc quit")
+	s += "\n" + selectorHelpStyle.Render("↑/↓ navigate • enter launch • → Right arrow. Select AI model. • Ctrl + C quit")
 
 	if m.width > 0 {
 		return lipgloss.NewStyle().MaxWidth(m.width).Render(s)

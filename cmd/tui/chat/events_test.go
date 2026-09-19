@@ -452,3 +452,33 @@ func TestMessagesEndWithCompactionResult(t *testing.T) {
 		t.Fatal("expected compaction result")
 	}
 }
+
+func TestMessageCounterLiveAndFreezesOnToolCalls(t *testing.T) {
+	m := chatModel{running: true}
+
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: "hello world"})
+	if got := m.entries[0].label; got != "out ↓ 3 tokens" {
+		t.Fatalf("live message label = %q, want the filling counter", got)
+	}
+
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: " more text"})
+	if got := m.entries[0].label; got != "out ↓ 6 tokens" {
+		t.Fatalf("live message label did not keep growing: %q", got)
+	}
+
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventToolCallDetected, ToolCalls: []api.ToolCall{{ID: "call-1"}}})
+	if got := m.entries[0].label; !strings.HasPrefix(got, "out ") || strings.Contains(got, "↓") {
+		t.Fatalf("label should freeze to the final number when tool calls arrive: %q", got)
+	}
+}
+
+func TestMessageCounterFreezesOnRunDone(t *testing.T) {
+	m := chatModel{running: true, runStartEntryIdx: 0}
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: "hello world"})
+
+	updated, _ := m.Update(chatRunDoneMsg{}) //nolint:errcheck
+	m = updated.(chatModel)
+	if got := m.entries[0].label; !strings.HasPrefix(got, "out ") || strings.Contains(got, "↓") {
+		t.Fatalf("run done should leave the final message counter: %q", got)
+	}
+}

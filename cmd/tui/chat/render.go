@@ -35,6 +35,7 @@ type chatEntry struct {
 	tools      []chatEntry
 	metrics    *api.Metrics
 	tokenCount int
+	outputTokens int
 	tokensNote string
 
 	version     int
@@ -511,10 +512,16 @@ func (m chatModel) renderEntryLines(entry chatEntry, body string, width int) []s
 	switch entry.role {
 	case "assistant":
 		innerWidth := max(1, width-lipgloss.Width(chatMessageIndent))
-		lines := indentLines(splitRenderedBody(renderMarkdownForView(body, innerWidth)), chatMessageIndent)
+		var lines []string
+		if strings.TrimSpace(entry.label) != "" {
+			// Live/final output counter sits on the header line (like a thinking
+			// block's status), above the indented message text.
+			lines = append(lines, chatMetaStyle.Render("•")+" "+entry.label)
+		}
+		lines = append(lines, indentLines(splitRenderedBody(renderMarkdownForView(body, innerWidth)), chatMessageIndent)...)
 		lines = append(lines, indentLines(renderMetricsLines(entry.metrics, innerWidth), chatMessageIndent)...)
 		if entry.tokensNote != "" {
-			lines = append(lines, chatMessageIndent+chatMetaStyle.Render("⏹ "+entry.tokensNote))
+			lines = append(lines, chatMessageIndent+chatMetaStyle.Render(entry.tokensNote))
 		}
 		if ts := entryTimestampLine(entry); ts != "" && len(lines) > 0 {
 			lines = append([]string{ts}, lines...)
@@ -648,13 +655,16 @@ func metricsEmpty(metrics api.Metrics) bool {
 }
 
 // tokensNoteFromResponse builds the token-mode status line: why generation
-// stopped plus the real prompt/output token counts from the final response.
-// wasThinking/thinkingTokens describe whether reasoning (thinking phase)
-// was still running at stop time and how many thinking tokens it consumed:
+// stopped plus the real prompt token count from the final response and the
+// run's total assistant text output — the sum of per-round out counts across
+// every assistant message of this run (intermediate reports included; the
+// thinking phase and tool calls are excluded). wasThinking/
+// thinkingTokens describe whether reasoning (thinking phase) was still
+// running at stop time and how many thinking tokens it consumed:
 // "разм. N" is appended when thinking happened, with "(оборваны)" when a
 // length limit cut it off mid-reasoning.
-func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkingTokens int) string {
-	parts := []string{stopReasonLabel(response.DoneReason)}
+func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkingTokens int, outputTokens int) string {
+	parts := []string{"⏹ " + stopReasonLabel(response.DoneReason)}
 	if response.PromptEvalCount > 0 {
 		line := fmt.Sprintf("prompt %d", response.PromptEvalCount)
 		if cached := response.PromptEvalCachedCount; cached != nil && *cached > 0 {
@@ -662,8 +672,10 @@ func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkin
 		}
 		parts = append(parts, line)
 	}
-	if response.EvalCount > 0 {
-		parts = append(parts, fmt.Sprintf("out %d", response.EvalCount))
+	// out: text tokens of every assistant round in this run (intermediate
+	// reports included); the thinking block and tool calls are not counted.
+	if outputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("out %d", outputTokens))
 	}
 	if thinkingTokens > 0 {
 		line := fmt.Sprintf("разм. %d", thinkingTokens)
@@ -673,6 +685,39 @@ func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkin
 		parts = append(parts, line)
 	}
 	return strings.Join(parts, " • ")
+}
+
+// outputNoteForEntry builds the per-message token annotation for one assistant
+// round of a run: its own text tokens (thinking and tool calls excluded),
+// shown like the "Thought (N)" count of a thinking block.
+func outputNoteForEntry(entry *chatEntry) string {
+	count := entry.outputTokens
+	if count == 0 {
+		count = approximateTokenCount(entry.content)
+	}
+	if count <= 0 {
+		return ""
+	}
+	return "out " + strconv.Itoa(count)
+}
+
+// runOutputTotal sums the per-round out counts of this run's assistant
+// messages (all rounds, intermediate reports included). Falls back to an
+// approximate token count of each entry's content when the per-delta counter
+// is unavailable.
+func runOutputTotal(entries []chatEntry, startIdx int) int {
+	total := 0
+	for i := max(0, startIdx); i < len(entries); i++ {
+		if entries[i].role != "assistant" {
+			continue
+		}
+		count := entries[i].outputTokens
+		if count == 0 {
+			count = approximateTokenCount(entries[i].content)
+		}
+		total += count
+	}
+	return total
 }
 
 func stopReasonLabel(reason string) string {
@@ -839,6 +884,29 @@ func thinkingActivityLabel(tokens int) string {
 		return "Thinking ↓ " + formatTokenCount(tokens)
 	}
 	return "Thinking"
+}
+
+// messageActivityLabel is the live output counter shown next to an assistant
+// message while it streams — analogous to a thinking block's "Thinking ↓ N".
+func messageActivityLabel(tokens int) string {
+	if tokens > 0 {
+		return "out ↓ " + formatTokenCount(tokens)
+	}
+	return ""
+}
+
+// finalizeMessageLabel freezes the running assistant message counter into its
+// final number (like finishThinkingEntry leaves "Thought (N)").
+func (m *chatModel) finalizeMessageLabel(idx int) {
+	if idx < 0 || idx >= len(m.entries) {
+		return
+	}
+	entry := &m.entries[idx]
+	if entry.role != "assistant" || strings.TrimSpace(entry.label) == "" {
+		return
+	}
+	entry.label = "out " + formatTokenCount(entry.outputTokens)
+	m.markEntryDirty(idx)
 }
 
 func (m *chatModel) syncThinkingEntry(content string) {

@@ -123,6 +123,8 @@ type chatModel struct {
 	thinkingPhaseStart  int
 	thinkingTokens      int
 	runThinkingTokens   int
+	runOutputText       string
+	runStartEntryIdx    int
 	compactingTokens    int
 	contextTokens       int
 	contextEstimate     bool
@@ -392,6 +394,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.thinkingTokens = 0
 		m.approvalPrompt = nil
+		// Leave the final "out N" counter on every assistant message of this run,
+		// like thinking blocks leave "Thought (N)" behind.
+		for i := m.runStartEntryIdx; i < len(m.entries); i++ {
+			if m.entries[i].role == "assistant" {
+				m.finalizeMessageLabel(i)
+			}
+		}
 		if msg.result != nil {
 			m.messages = msg.result.Messages
 			m.liveMessages = nil
@@ -406,13 +415,31 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.applyResponseMetrics(&msg.result.Latest)
 			}
 			if m.tokensMode {
-				if note := tokensNoteFromResponse(msg.result.Latest, wasThinking, thinkingTokens); note != "" {
-					for i := len(m.entries) - 1; i >= 0; i-- {
-						if m.entries[i].role == "assistant" {
-							m.entries[i].tokensNote = note
-							m.markEntryDirty(i)
-							break
+				// Per-round out counts: each assistant message of this run carries
+				// its own token count (like a thinking block shows "Thought (N)"),
+				// and the final line's "out" is their sum — all rounds, intermediate
+				// reports included; thinking/tools excluded.
+				lastIdx := -1
+				for i := len(m.entries) - 1; i >= m.runStartEntryIdx; i-- {
+					if m.entries[i].role == "assistant" {
+						lastIdx = i
+						break
+					}
+				}
+				if lastIdx >= 0 {
+					totalOut := runOutputTotal(m.entries, m.runStartEntryIdx)
+					for i := m.runStartEntryIdx; i < len(m.entries); i++ {
+						if m.entries[i].role != "assistant" || i == lastIdx {
+							continue
 						}
+						if n := outputNoteForEntry(&m.entries[i]); n != "" {
+							m.entries[i].tokensNote = n
+							m.markEntryDirty(i)
+						}
+					}
+					if note := tokensNoteFromResponse(msg.result.Latest, wasThinking, thinkingTokens, totalOut); note != "" {
+						m.entries[lastIdx].tokensNote = note
+						m.markEntryDirty(lastIdx)
 					}
 				}
 			}
@@ -1083,6 +1110,7 @@ func (m *chatModel) resetChat(status string) (tea.Model, tea.Cmd) {
 	m.thinking = false
 	m.thinkingTokens = 0
 	m.runThinkingTokens = 0
+	m.runOutputText = ""
 	m.contextTokens = 0
 	m.contextEstimate = true
 	m.scroll = 0
@@ -1221,6 +1249,7 @@ func (m *chatModel) startRunWithMessages(displayInput, historyInput string, newM
 	}
 	m.running = true
 	m.awaitingModel = true
+	m.runStartEntryIdx = len(m.entries)
 	m.status = "running"
 	m.spinner = 0
 	m.scroll = 0
@@ -1228,6 +1257,7 @@ func (m *chatModel) startRunWithMessages(displayInput, historyInput string, newM
 	m.thinking = false
 	m.thinkingTokens = 0
 	m.runThinkingTokens = 0
+	m.runOutputText = ""
 	m.eventErrorRendered = false
 	systemPrompt := m.systemPrompt(extraSystemPrompt)
 	m.liveMessages = append(slices.Clone(m.messages), newMessages...)
