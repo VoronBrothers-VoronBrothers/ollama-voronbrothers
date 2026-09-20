@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	coreagent "github.com/ollama/ollama/agent"
+	mcps "github.com/ollama/ollama/agent/mcps"
 	agenttools "github.com/ollama/ollama/agent/tools"
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/cmd/config"
@@ -98,12 +99,17 @@ func GenerateAgentTUI(cmd *cobra.Command, client *api.Client, opts agentTUIOptio
 	if _, err := reloadSkills(); err != nil {
 		return fmt.Errorf("load agent skills: %w", err)
 	}
+	mcpsPool, mcpErr := mcps.ConnectAll(cmd.Context(), mcps.DefaultPath())
+	if mcpErr != nil {
+		return fmt.Errorf("connect mcp servers: %w", mcpErr)
+	}
+	defer func() { _ = mcpsPool.Close() }()
 	var registry *coreagent.Registry
 	registryForModel := func(ctx context.Context, model string) *coreagent.Registry {
-		return agentToolsRegistry(ctx, client, model, skillCatalog)
+		return agentToolsRegistry(ctx, client, model, skillCatalog, mcpsPool)
 	}
 	if opts.Model != "" {
-		registry = agentToolsRegistry(cmd.Context(), client, opts.Model, skillCatalog)
+		registry = agentToolsRegistry(cmd.Context(), client, opts.Model, skillCatalog, mcpsPool)
 	}
 	systemPrompt := agentSystemPromptWithWorkingDir(opts.Model, opts.System, agentSkillSystemContext(skillCatalog, registry, opts.ToolsDisabled), cwd)
 
@@ -237,7 +243,7 @@ func agentSystemFromShow(ctx context.Context, client *api.Client, modelName stri
 	return resp.System
 }
 
-func agentToolsRegistry(ctx context.Context, client *api.Client, modelName string, skillCatalog *coreagent.SkillCatalog) *coreagent.Registry {
+func agentToolsRegistry(ctx context.Context, client *api.Client, modelName string, skillCatalog *coreagent.SkillCatalog, mcpsPool *mcps.Pool) *coreagent.Registry {
 	supportsTools, err := agentModelSupportsTools(ctx, client, modelName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\033[1mwarning:\033[0m could not check model capabilities: %v\n", err)
@@ -253,6 +259,7 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	}
 	registry.Register(&agenttools.Read{})
 	registry.Register(&agenttools.Edit{})
+	registry.Register(&agenttools.Patch{})
 	registry.Register(&agenttools.Write{})
 	if len(skillCatalog.List()) > 0 {
 		registry.Register(&agenttools.Skill{Catalog: skillCatalog})
@@ -266,6 +273,7 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 			fmt.Fprintf(os.Stderr, "%s\n", internalcloud.DisabledError("web search is unavailable"))
 		}
 	}
+	mcpsPool.RegisterTo(registry)
 	return registry
 }
 

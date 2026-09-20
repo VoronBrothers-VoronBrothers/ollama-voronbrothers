@@ -62,7 +62,6 @@ func TestChatViewRendersEmptyPromptHint(t *testing.T) {
 	}
 }
 
-
 func TestChatUserEntryHasNoLabel(t *testing.T) {
 	m := chatModel{entries: []chatEntry{{role: "user", content: "hello"}}}
 

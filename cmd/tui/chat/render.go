@@ -21,22 +21,22 @@ import (
 )
 
 type chatEntry struct {
-	role       string
-	content    string
-	label      string
-	detail     string
-	status     string
-	err        string
-	toolID     string
-	args       map[string]any
-	expanded   bool
-	startedAt  time.Time
-	finishedAt time.Time
-	tools      []chatEntry
-	metrics    *api.Metrics
-	tokenCount int
+	role         string
+	content      string
+	label        string
+	detail       string
+	status       string
+	err          string
+	toolID       string
+	args         map[string]any
+	expanded     bool
+	startedAt    time.Time
+	finishedAt   time.Time
+	tools        []chatEntry
+	metrics      *api.Metrics
+	tokenCount   int
 	outputTokens int
-	tokensNote string
+	tokensNote   string
 
 	version     int
 	renderKey   chatEntryRenderKey

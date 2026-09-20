@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	bashTimeout        = 40 * time.Second
+	bashTimeout = 40 * time.Second
 	// bashLongTimeout is the extended deadline for the parallel `bash_long` tool,
 	// meant to wait on long-running commands (GPU training, big downloads).
 	bashLongTimeout    = 600 * time.Second // 10 minutes

@@ -479,7 +479,7 @@ func (m *chatModel) movePromptHistory(delta int) bool {
 			m.inputAttachments = nil
 			m.inputPastedTexts = nil
 			m.resetPromptHistoryCursor()
-		m.markInputChange()
+			m.markInputChange()
 			m.complete = 0
 			return true
 		}

@@ -138,9 +138,9 @@ func ApplyAccountStateToSelectionItems(items []ModelItem, state AccountState) []
 	for i, item := range items {
 		out[i] = SelectionItem{
 			Name:              item.Name,
-			Description:       "", // voron: без описаний под названием
+			Description:       "",    // voron: без описаний под названием
 			Recommended:       false, // voron: без секции Recommended — плоский список
-			AvailabilityBadge: "", // voron: без подписи справа (Sign in required и т.п.)
+			AvailabilityBadge: "",    // voron: без подписи справа (Sign in required и т.п.)
 		}
 	}
 	return out

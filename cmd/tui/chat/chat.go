@@ -220,18 +220,18 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	approvalState.Set(opts.AllowAllTools, nil)
 
 	m := chatModel{
-		ctx:             ctx,
-		opts:            opts,
-		chatID:          opts.ChatID,
-		messages:        slices.Clone(opts.Messages),
-		workingDir:      opts.WorkingDir,
-		approvalState:   approvalState,
-		defaultAllowAll: opts.AllowAllTools,
+		ctx:              ctx,
+		opts:             opts,
+		chatID:           opts.ChatID,
+		messages:         slices.Clone(opts.Messages),
+		workingDir:       opts.WorkingDir,
+		approvalState:    approvalState,
+		defaultAllowAll:  opts.AllowAllTools,
 		autoSendDuration: 120 * time.Second,
 		promptHistory:    initialPromptHistory(ctx, opts),
 		status:           "ready",
-		openModelOnInit: opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
-		tokensMode: true,
+		openModelOnInit:  opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
+		tokensMode:       true,
 	}
 	m.nextImageID, m.nextAudioID = nextInputAttachmentIDsFromMessages(m.messages)
 	m.nextPastedTextID = nextInputPastedTextIDFromMessages(m.messages)

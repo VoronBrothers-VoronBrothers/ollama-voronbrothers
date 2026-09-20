@@ -9,6 +9,7 @@ import (
 )
 
 const bashLongToolName = "bash_long"
+
 // Per-call bounds for the optional `timeout` argument of bash_long.
 // The default (no argument) stays at bashLongTimeout, 10 minutes.
 const (
