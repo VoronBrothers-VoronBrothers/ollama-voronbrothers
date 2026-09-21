@@ -290,7 +290,6 @@ func safetensorsCreateOptions(modelfile *parser.Modelfile, filename, modelName s
 }
 
 var (
-	errAdaptersUnsupported = errors.New("LoRA adapters are no longer supported")
 	errForceLocalOnly      = errors.New("--force is only supported for local MLX safetensors imports")
 	errTypicalPUnsupported = errors.New("typical_p is no longer supported")
 )
@@ -331,9 +330,6 @@ func CreateHandler(cmd *cobra.Command, args []string) error {
 	modelfile, filename, err := readCreateModelfile(cmd)
 	if err != nil {
 		return err
-	}
-	if slices.ContainsFunc(modelfile.Commands, func(c parser.Command) bool { return c.Name == "adapter" }) {
-		return errAdaptersUnsupported
 	}
 	if slices.ContainsFunc(modelfile.Commands, func(c parser.Command) bool { return c.Name == "typical_p" }) {
 		return errTypicalPUnsupported
@@ -382,7 +378,7 @@ func CreateHandler(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// A FROM-only create has nothing to transfer, so skip the store probe.
-	local := len(req.Files)+len(req.DraftFiles) > 0 && sharedBlobStore(cmd.Context(), client)
+	local := len(req.Files)+len(req.DraftFiles)+len(req.Adapters) > 0 && sharedBlobStore(cmd.Context(), client)
 
 	var g errgroup.Group
 	g.SetLimit(max(runtime.GOMAXPROCS(0)-1, 1))
@@ -413,12 +409,26 @@ func CreateHandler(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	adapters := syncmap.NewSyncMap[string, string]()
+	adapterNames := createRequestFileNames(req.Adapters)
+	for f, digest := range req.Adapters {
+		g.Go(func() error {
+			if _, err := createBlob(cmd, client, f, digest, p, local); err != nil {
+				return err
+			}
+
+			adapters.Store(adapterNames[f], digest)
+			return nil
+		})
+	}
+
 	if err := g.Wait(); err != nil {
 		return err
 	}
 
 	req.Files = files.Items()
 	req.DraftFiles = draftFiles.Items()
+	req.Adapters = adapters.Items()
 
 	bars := make(map[string]*progress.Bar)
 	fn := func(resp api.ProgressResponse) error {

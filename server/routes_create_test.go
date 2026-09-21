@@ -804,18 +804,30 @@ func TestCreateFromBin(t *testing.T) {
 	})
 
 	t.Run("adapters", func(t *testing.T) {
+		_, adapterDigest := createBinFile(t, map[string]any{"general.type": "adapter"}, nil)
 		w := createRequest(t, s.CreateHandler, api.CreateRequest{
 			Name:     "my-gguf-model",
 			Files:    map[string]string{"0.gguf": digest},
-			Adapters: map[string]string{"adapter.gguf": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			Adapters: map[string]string{"adapter.gguf": adapterDigest},
 			Stream:   &stream,
 		})
 
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("expected status 400, got %d", w.Code)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), errAdaptersUnsupported.Error()) {
-			t.Errorf("expected adapters unsupported error, got:\n%s", w.Body.String())
+
+		mf, err := manifest.ParseNamedManifest(model.ParseName("my-gguf-model"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundAdapterLayer := false
+		for _, layer := range mf.Layers {
+			if layer.MediaType == "application/vnd.ollama.image.adapter" {
+				foundAdapterLayer = true
+			}
+		}
+		if !foundAdapterLayer {
+			t.Errorf("created manifest has no adapter layer, layers: %v", mf.Layers)
 		}
 	})
 
@@ -2452,7 +2464,7 @@ func TestCreateSafetensorsRejectsUnsupportedInputs(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), errAdaptersUnsupported.Error()) {
+		if !strings.Contains(w.Body.String(), safetensorsAdaptersUnsupported.Error()) {
 			t.Fatalf("expected adapters error, got %s", w.Body.String())
 		}
 	})
@@ -2499,8 +2511,8 @@ func TestCreateRejectsAdapterGGUF(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), errAdaptersUnsupported.Error()) {
-		t.Fatalf("response = %s, want adapters unsupported error", w.Body.String())
+	if !strings.Contains(w.Body.String(), adapterFileAsModelUnsupported.Error()) {
+		t.Fatalf("response = %s, want adapters rejected as model files error", w.Body.String())
 	}
 }
 

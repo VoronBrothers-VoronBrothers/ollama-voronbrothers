@@ -1820,22 +1820,90 @@ func TestCreateBlob(t *testing.T) {
 	})
 }
 
-func TestCreateHandlerRejectsAdaptersBeforeUpload(t *testing.T) {
+func TestCreateHandlerUploadsAdapter(t *testing.T) {
+	adapterData := []byte("adapter gguf bytes")
+	wantDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(adapterData))
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && r.URL.Path == "/" {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/api/create":
+			req := api.CreateRequest{}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			if len(req.Adapters) != 1 {
+				t.Errorf("expected 1 adapter in create request, got %d", len(req.Adapters))
+				http.Error(w, "unexpected adapters count", http.StatusBadRequest)
+				return
+			}
+
+			for _, digest := range req.Adapters {
+				if digest != wantDigest {
+					t.Errorf("adapter digest = %s, want %s", digest, wantDigest)
+				}
+			}
+
+			resp := api.ProgressResponse{Status: "success"}
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.(http.Flusher).Flush()
+		default:
+			if strings.HasPrefix(r.URL.Path, "/api/blobs/") {
+				io.ReadAll(r.Body)
+				if r.Method == http.MethodHead {
+					w.WriteHeader(http.StatusNotFound)
+				} else {
+					w.WriteHeader(http.StatusOK)
+				}
+			} else {
+				t.Errorf("unexpected request to %s", r.URL.Path)
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+		}
+	}))
+	t.Setenv("OLLAMA_HOST", mockServer.URL)
+	t.Cleanup(mockServer.Close)
+
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "adapter.gguf"), adapterData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	modelfile := filepath.Join(dir, "Modelfile")
-	if err := os.WriteFile(modelfile, []byte("FROM base\nADAPTER ./adapter.gguf\n"), 0o644); err != nil {
+	if err := os.WriteFile(modelfile, []byte("FROM foo\nADAPTER ./adapter.gguf\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := &cobra.Command{}
-	cmd.Flags().String("file", modelfile, "")
-	cmd.Flags().String("quantize", "", "")
-	cmd.Flags().String("draft-quantize", "", "")
-	cmd.Flags().Bool("force", false, "")
+	cmd.Flags().String("file", "", "")
+	if err := cmd.Flags().Set("file", modelfile); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Flags().Bool("insecure", false, "")
 	cmd.SetContext(t.Context())
 
-	if err := CreateHandler(cmd, []string{"test-model"}); !errors.Is(err, errAdaptersUnsupported) {
-		t.Fatalf("error = %v, want %v", err, errAdaptersUnsupported)
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := CreateHandler(cmd, []string{"test-model"})
+
+	w.Close()
+	os.Stderr = oldStderr
+	if _, err := io.ReadAll(r); err != nil {
+		t.Fatal(err)
+	}
+
+	if err != nil {
+		t.Fatalf("CreateHandler error = %v, want none", err)
 	}
 }
 

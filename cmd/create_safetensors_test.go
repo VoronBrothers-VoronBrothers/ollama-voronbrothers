@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -262,13 +261,13 @@ func TestCreateModel_NotSafetensorsDir(t *testing.T) {
 	}
 }
 
-func TestConfigFromModelfileRejectsAdapters(t *testing.T) {
+func TestConfigFromModelfileIgnoresAdapters(t *testing.T) {
 	modelfile, err := parser.ParseFile(strings.NewReader("FROM ./model\nADAPTER ./adapter.gguf\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := configFromModelfile(modelfile); !errors.Is(err, errAdaptersUnsupported) {
-		t.Fatalf("configFromModelfile() error = %v, want %v", err, errAdaptersUnsupported)
+	if _, _, err := configFromModelfile(modelfile); err != nil {
+		t.Fatalf("configFromModelfile() error = %v, want none", err)
 	}
 }
 

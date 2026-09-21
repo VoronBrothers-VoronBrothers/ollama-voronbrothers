@@ -76,7 +76,9 @@ func configFromModelfile(modelfile *parser.Modelfile) (string, *modelfileConfig,
 			}
 			mfConfig.Requires = strings.TrimPrefix(requires, "v")
 		case "adapter":
-			return "", nil, errAdaptersUnsupported
+			// ADAPTER files are handled by the standard Modelfile + API path;
+			// the in-process safetensors import does not use them.
+			continue
 		case "message":
 			role, content, _ := strings.Cut(cmd.Args, ": ")
 			mfConfig.Messages = append(mfConfig.Messages, api.Message{Role: role, Content: content})
