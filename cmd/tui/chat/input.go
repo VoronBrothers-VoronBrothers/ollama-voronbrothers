@@ -1210,7 +1210,7 @@ func inputBoxBorderLine(width int, left, right string) string {
 
 func renderInputBoxBodyLine(line string, width int) string {
 	padding := strings.Repeat(" ", inputBoxHorizontalPadding)
-	return chatInputBorderStyle.Render(">>") + padding + padRenderedLine(line, width) + padding + chatInputBorderStyle.Render("<<")
+	return padding + padRenderedLine(line, width) + padding
 }
 
 func padRenderedLine(line string, width int) string {
