@@ -259,7 +259,9 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	}
 	registry.Register(&agenttools.Read{})
 	registry.Register(&agenttools.Edit{})
-	registry.Register(&agenttools.Patch{})
+	// patch отключён 23.09: экономия контекста (инструмент не вызывался);
+	// код agent/tools/patch.go на месте — раскомментировать строку, чтобы вернуть.
+	// registry.Register(&agenttools.Patch{})
 	registry.Register(&agenttools.Write{})
 	if len(skillCatalog.List()) > 0 {
 		registry.Register(&agenttools.Skill{Catalog: skillCatalog})
