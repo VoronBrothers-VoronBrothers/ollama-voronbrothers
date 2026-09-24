@@ -222,6 +222,10 @@ func (tt TensorType) typeSize() int64 {
 		return 1 + tt.blockSize()/2
 	case TensorTypeNVFP4:
 		return 4 + tt.blockSize()/2
+	case tensorTypeTQ1_0: // qh[256/64] + qs[(256-4*256/64)/5] + half d = 4+48+2
+		return 2 + tt.blockSize()/64 + (tt.blockSize()-4*tt.blockSize()/64)/5
+	case tensorTypeTQ2_0: // qs[256/4] + half d = 64+2
+		return 2 + tt.blockSize()/4
 	case TensorTypeQ1_0:
 		return 2 + tt.blockSize()/8
 	case TensorTypeQ2_0:
