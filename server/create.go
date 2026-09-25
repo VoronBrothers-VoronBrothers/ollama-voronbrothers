@@ -50,6 +50,8 @@ var (
 	errInvalidSplitGGUF            = errors.New("invalid split GGUF")
 	errMixedModelTypes             = errors.New("mixed model file types")
 	errInvalidCreateInfo           = errors.New("invalid create info")
+	errAdaptersUnsupported         = errors.New("LoRA adapters are no longer supported")
+	errTypicalPDeprecated          = errors.New("typical_p is deprecated and cannot be set as a model parameter; pass it as a request option instead")
 )
 
 const (
@@ -70,7 +72,7 @@ func (s *Server) CreateHandler(c *gin.Context) {
 	}
 
 	if r.Parameters["typical_p"] != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": errTypicalPUnsupported.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": errTypicalPDeprecated.Error()})
 		return
 	}
 
