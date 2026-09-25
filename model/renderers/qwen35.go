@@ -194,10 +194,51 @@ func (r *Qwen35Renderer) validateMessages(messages []api.Message) error {
 		}
 	}
 	if !foundUserQuery {
+		// Диагностика: печатаем роли+длинны всех сообщений, чтобы видеть,
+		// на каком именно ходе падаем (чистый вопрос уехал в компакцию?).
+		detail := make([]string, 0, len(messages))
+		for i, m := range messages {
+			c, _ := r.renderContent(m, 0)
+			c = strings.TrimSpace(c)
+			tag := ""
+			if m.Role == "user" && strings.HasPrefix(c, "<tool_response>") && strings.HasSuffix(c, "</tool_response>") {
+				tag = ",tool_result_only"
+			}
+			detail = append(detail, fmt.Sprintf("%d:%s[%d runes%s]", i, m.Role, len([]rune(c)), tag))
+		}
+		slog.Error("qwen3.8 no user query found in messages",
+			"count", len(messages), "messages", strings.Join(detail, "; "))
 		return fmt.Errorf("no user query found in messages")
 	}
 
 	return nil
+}
+
+// ensureUserQuery guarantees the 3.8 renderer invariant that at least one clean
+// (non-tool-result) user turn exists whenever tools are attached — i.e. after a
+// compaction whose summary swallowed every earlier real user query. When none
+// survives it appends a minimal continuation prompt so Render can proceed and
+// validateMessages won't hard-error.
+func (r *Qwen35Renderer) ensureUserQuery(messages []api.Message, hasTools bool) []api.Message {
+	if r.variant != qwen35Renderer38 || !hasTools {
+		return messages
+	}
+	for _, message := range messages {
+		if message.Role != "user" {
+			continue
+		}
+		content, _ := r.renderContent(message, 0)
+		content = strings.TrimSpace(content)
+		if !(strings.HasPrefix(content, "<tool_result>") && strings.HasSuffix(content, "</tool_result>")) {
+			return messages // a genuine user query is present
+		}
+	}
+	slog.Warn("qwen3.8: no clean user turn after compaction; synthesizing continuation prompt")
+	fallback := api.Message{
+		Role:    "user",
+		Content: "(continuation) Continue answering my original request using the conversation summary and tool results above.",
+	}
+	return append(messages, fallback)
 }
 
 func (r *Qwen35Renderer) Render(messages []api.Message, tools []api.Tool, think *api.ThinkValue) (string, error) {
@@ -207,6 +248,10 @@ func (r *Qwen35Renderer) Render(messages []api.Message, tools []api.Tool, think 
 		if err != nil {
 			return "", err
 		}
+		// Belt-and-suspenders over the compactor invariant: if every clean user
+		// query was archived into the summary and only synthetic tool-result
+		// turns remain, synthesize a continuation prompt so Render proceeds.
+		messages = r.ensureUserQuery(messages, len(tools) > 0)
 	}
 	if err := r.validateMessages(messages); err != nil {
 		return "", err
