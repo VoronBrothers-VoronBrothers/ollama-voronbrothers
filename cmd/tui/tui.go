@@ -215,7 +215,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "right", "l":
+		case "right", "l", "tab":
 			item := m.items[m.cursor]
 			if item.isRunModel || m.changeableItem(item) {
 				m.selected = true
@@ -260,7 +260,7 @@ func (m model) View() string {
 		s += m.renderMenuItem(i, item)
 	}
 
-	s += "\n" + selectorHelpStyle.Render("↑/↓ navigate • enter launch • → Right arrow. Select AI model. • Ctrl + C quit")
+	s += "\n" + selectorHelpStyle.Render("↑/↓ navigate • enter launch • → / Tab. Select AI model. • Ctrl + C quit")
 
 	if m.width > 0 {
 		return lipgloss.NewStyle().MaxWidth(m.width).Render(s)

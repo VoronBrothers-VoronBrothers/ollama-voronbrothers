@@ -145,6 +145,16 @@ func TestMenuEnterOnRunSelectsRun(t *testing.T) {
 	}
 }
 
+func TestMenuTabOnRunSelectsChangeRun(t *testing.T) {
+	menu := newModel(launcherTestState())
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got := updated.(model)
+	want := TUIAction{Kind: TUIActionRunModel, ForceConfigure: true}
+	if !got.selected || got.action != want {
+		t.Fatalf("expected tab on run to select change-run action, got selected=%v action=%v", got.selected, got.action)
+	}
+}
+
 func TestMenuRightOnRunSelectsChangeRun(t *testing.T) {
 	menu := newModel(launcherTestState())
 	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyRight})

@@ -104,6 +104,33 @@ func GenerateAgentTUI(cmd *cobra.Command, client *api.Client, opts agentTUIOptio
 		return fmt.Errorf("connect mcp servers: %w", mcpErr)
 	}
 	defer func() { _ = mcpsPool.Close() }()
+
+	listMCPServers := func(_ context.Context) ([]string, error) {
+		cfg, err := mcps.Load(mcps.DefaultPath())
+		if err != nil {
+			return nil, fmt.Errorf("read mcp config: %w", err)
+		}
+		names := make([]string, 0, len(cfg.Servers))
+		for _, server := range cfg.Servers {
+			names = append(names, server.Name)
+		}
+		return names, nil
+	}
+	reloadMCPs := func(ctx context.Context) ([]string, error) {
+		// Connect the new pool first; only close the old one on success so a
+		// failed reload never leaves the session without its MCP tools.
+		pool, err := mcps.ConnectAll(ctx, mcps.DefaultPath())
+		if err != nil {
+			return nil, fmt.Errorf("connect mcp servers: %w", err)
+		}
+		old := mcpsPool
+		mcpsPool = pool
+		if old != nil && old != pool {
+			_ = old.Close()
+		}
+		names, err := listMCPServers(ctx)
+		return names, err
+	}
 	var registry *coreagent.Registry
 	registryForModel := func(ctx context.Context, model string) *coreagent.Registry {
 		return agentToolsRegistry(ctx, client, model, skillCatalog, mcpsPool)
@@ -134,6 +161,8 @@ func GenerateAgentTUI(cmd *cobra.Command, client *api.Client, opts agentTUIOptio
 		Skills:              skillCatalog,
 		ImportSkills:        coreagent.ImportSkills,
 		ReloadSkills:        reloadSkills,
+		MCPServers:          listMCPServers,
+		ReloadMCPs:          reloadMCPs,
 		SystemPrompt:        systemPrompt,
 		WorkingDir:          cwd,
 		Format:              opts.Format,

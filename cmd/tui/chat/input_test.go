@@ -667,8 +667,167 @@ func TestSkillsImportUsage(t *testing.T) {
 		t.Fatal("invalid skills import should not start a model run")
 	}
 	m = updated.(chatModel)
-	if len(m.entries) != 1 || m.entries[0].role != "error" || !strings.Contains(m.entries[0].content, "usage: /skills [import codex|claude|pi]") {
+	if len(m.entries) != 1 || m.entries[0].role != "error" || !strings.Contains(m.entries[0].content, "usage: /skills [import codex|claude|pi | remove ") {
 		t.Fatalf("entries = %#v", m.entries)
+	}
+}
+
+func writeChatTestSkill(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: " + name + "\ndescription: Test skill.\n---\nBody." 
+	if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillsRemoveHotReloadKeepsContext(t *testing.T) {
+	userDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv(coreagent.SkillsDirEnv, userDir)
+	writeChatTestSkill(t, userDir, "gone-skill")
+	before, err := coreagent.LoadDefaultSkills(workingDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := &coreagent.Registry{}
+	var reloaded, rebuilt, prompted bool
+	m := chatModel{
+		ctx:        context.Background(),
+		workingDir: workingDir,
+		opts: Options{
+			Model:     "test",
+			Client:    chatTestClient{},
+			WorkingDir: workingDir,
+			Skills:    before,
+			ReloadSkills: func() (*coreagent.SkillCatalog, error) {
+				reloaded = true
+				return coreagent.LoadDefaultSkills(workingDir)
+			},
+			ToolRegistryForModel: func(context.Context, string) *coreagent.Registry {
+				rebuilt = true
+				return registry
+			},
+			SystemPromptForModel: func(_ context.Context, _ string, got *coreagent.Registry, _ bool) string {
+				prompted = got == registry
+				return ""
+			},
+		},
+		entries: []chatEntry{{role: "user", content: "earlier message"}},
+		input:   []rune("/skills remove gone-skill"),
+	}
+	updated, cmd := m.handleSubmit()
+	if cmd != nil {
+		t.Fatal("skills remove should not start a model run")
+	}
+	m = updated.(chatModel)
+	if !reloaded || !rebuilt || !prompted {
+		t.Fatalf("reload=%v rebuilt=%v prompted=%v", reloaded, rebuilt, prompted)
+	}
+	if _, err := os.Stat(filepath.Join(userDir, "gone-skill")); !os.IsNotExist(err) {
+		t.Fatal("skill directory was not removed")
+	}
+	for _, skill := range m.opts.Skills.List() {
+		if skill.Name == "gone-skill" {
+			t.Fatal("removed skill still present in reloaded catalog")
+		}
+	}
+	// Context: the pre-existing entry survives and the removal report is appended.
+	if len(m.entries) != 2 || m.entries[0].role != "user" || m.entries[0].content != "earlier message" {
+		t.Fatalf("context not preserved: %#v", m.entries)
+	}
+	if !strings.Contains(m.entries[1].content, `Removed skill "gone-skill"`) {
+		t.Fatalf("remove report = %q", m.entries[1].content)
+	}
+	if m.status != "skills reloaded" {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestSkillsRemoveUnknown(t *testing.T) {
+	userDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv(coreagent.SkillsDirEnv, userDir)
+	m := chatModel{ctx: context.Background(), workingDir: workingDir, opts: Options{WorkingDir: workingDir}, input: []rune("/skills remove no-such")}
+	updated, cmd := m.handleSubmit()
+	if cmd != nil {
+		t.Fatal("unknown skill removal should not start a model run")
+	}
+	m = updated.(chatModel)
+	if len(m.entries) != 1 || !strings.Contains(m.entries[0].content, "not found in any scope") {
+		t.Fatalf("entries = %#v", m.entries)
+	}
+}
+
+func TestMCPListAndReload(t *testing.T) {
+	registry := &coreagent.Registry{}
+	var reloadCalls int
+	var rebuilt, prompted bool
+	opts := Options{
+		Model:  "test",
+		Client: chatTestClient{},
+		MCPServers: func(context.Context) ([]string, error) {
+			return []string{"fs"}, nil
+		},
+		ReloadMCPs: func(context.Context) ([]string, error) {
+			reloadCalls++
+			return []string{"fs", "web"}, nil
+		},
+		ToolRegistryForModel: func(context.Context, string) *coreagent.Registry {
+			rebuilt = true
+			return registry
+		},
+		SystemPromptForModel: func(_ context.Context, _ string, got *coreagent.Registry, _ bool) string {
+			prompted = got == registry
+			return ""
+		},
+	}
+
+	m := chatModel{ctx: context.Background(), opts: opts, input: []rune("/mcp")}
+	updated, cmd := m.handleSubmit()
+	if cmd != nil {
+		t.Fatal("mcp list should not start a model run")
+	}
+	m = updated.(chatModel)
+	if reloadCalls != 0 || rebuilt || prompted {
+		t.Fatalf("list must not reconnect or rebuild: calls=%d", reloadCalls)
+	}
+	if len(m.entries) != 1 || !strings.Contains(m.entries[0].content, "MCP servers in config: fs") {
+		t.Fatalf("list entries = %#v", m.entries)
+	}
+
+	m.input = []rune("/mcp reload")
+	updated, cmd = m.handleSubmit()
+	if cmd != nil {
+		t.Fatal("mcp reload should not start a model run")
+	}
+	m = updated.(chatModel)
+	if reloadCalls != 1 || !rebuilt || !prompted {
+		t.Fatalf("reload=%d rebuilt=%v prompted=%v", reloadCalls, rebuilt, prompted)
+	}
+	if m.opts.Tools != registry {
+		t.Fatal("tools were not rebuilt after MCP reload")
+	}
+	last := m.entries[len(m.entries)-1]
+	if !strings.Contains(last.content, "MCP reconnected: fs, web") {
+		t.Fatalf("reload entry = %q", last.content)
+	}
+
+	m.input = []rune("/mcp bogus")
+	updated, _ = m.handleSubmit()
+	m = updated.(chatModel)
+	if len(m.entries) == 0 || !strings.Contains(m.entries[len(m.entries)-1].content, "usage: /mcp [reload]") {
+		t.Fatalf("usage entries = %#v", m.entries)
+	}
+
+	nilOpts := chatModel{input: []rune("/mcp")}
+	updated, _ = nilOpts.handleSubmit()
+	nilM := updated.(chatModel)
+	if len(nilM.entries) == 0 || !strings.Contains(nilM.entries[0].content, "not available") {
+		t.Fatalf("nil opts entries = %#v", nilM.entries)
 	}
 }
 

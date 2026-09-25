@@ -52,6 +52,8 @@ type Options struct {
 	Skills                      *coreagent.SkillCatalog
 	ImportSkills                func(string) (coreagent.SkillImportResult, error)
 	ReloadSkills                func() (*coreagent.SkillCatalog, error)
+	MCPServers                  func(context.Context) ([]string, error)
+	ReloadMCPs                  func(context.Context) ([]string, error)
 	ToolRegistryForModel        func(context.Context, string) *coreagent.Registry
 	ToolsDisabled               bool
 	MultiModalForModel          func(context.Context, string) bool

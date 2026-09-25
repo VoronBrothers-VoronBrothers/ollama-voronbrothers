@@ -308,6 +308,51 @@ func ImportSkills(source string) (SkillImportResult, error) {
 	return importSkillsFromRoots(source, conventionalSkillImportRoots(home), destination)
 }
 
+// RemoveSkill deletes the on-disk skill directory matching name from every
+// scanned scope in precedence order: project .ollama/skills, project
+// .agents/skills, the user Ollama skills dir (SkillsDir), then ~/.agents/skills.
+// It returns the removed directories. The bundled skill-creator is protected
+// because every catalog load reinstalls it.
+func RemoveSkill(projectDir string, name string) ([]string, error) {
+	if !skillName.MatchString(name) {
+		return nil, fmt.Errorf("invalid skill name %q", name)
+	}
+	if name == bundledSkillCreatorName {
+		return nil, fmt.Errorf("%s is a bundled skill and cannot be removed; it is reinstalled on every load", name)
+	}
+	roots := []string{}
+	projectDir = strings.TrimSpace(projectDir)
+	if projectDir != "" {
+		if abs, err := filepath.Abs(projectDir); err == nil {
+			roots = append(roots, filepath.Join(abs, ".ollama", "skills"), filepath.Join(abs, ".agents", "skills"))
+		}
+	}
+	userOllama, err := SkillsDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve skills directory: %w", err)
+	}
+	roots = append(roots, userOllama)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, filepath.Join(home, ".agents", "skills"))
+	}
+	var removed []string
+	for _, root := range roots {
+		dir := filepath.Join(root, name)
+		fi, err := os.Stat(dir)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return removed, fmt.Errorf("remove %s: %w", dir, err)
+		}
+		removed = append(removed, dir)
+	}
+	if len(removed) == 0 {
+		return nil, fmt.Errorf("skill %q not found in any scope", name)
+	}
+	return removed, nil
+}
+
 func conventionalSkillImportRoots(home string) map[string]string {
 	return map[string]string{
 		"codex":  filepath.Join(home, ".codex", "skills"),

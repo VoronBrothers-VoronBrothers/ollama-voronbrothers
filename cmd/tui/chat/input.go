@@ -57,7 +57,8 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/think", description: "set thinking mode"},
 	{name: "/tools", description: "toggle tools on or off"},
 	{name: "/system", usage: "/system [on|off]", description: "show or set the built-in system prompt"},
-	{name: "/skills", usage: "/skills [import codex|claude|pi]", description: "list or import skills"},
+	{name: "/skills", usage: "/skills [import codex|claude|pi | remove <name>]", description: "list, import or remove skills (hot reload keeps chat context)"},
+	{name: "/mcp", usage: "/mcp [reload]", description: "list MCP servers or reconnect them without restarting"},
 	{name: "/compact", description: "summarize older context"},
 	{name: "/help", description: "show commands", aliases: []string{"/?"}},
 	{name: "/bye", description: "exit", aliases: []string{"/exit"}},
@@ -182,6 +183,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return m.handleSystemCommand(args)
 	case command == "/skills":
 		return m.handleSkillsCommand(args)
+	case command == "/mcp":
+		return m.handleMCPCommand(args)
 	case command == "/очисточередь":
 		m.pendingPrompts = nil
 		m.status = "ready"
@@ -239,8 +242,10 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 func (m *chatModel) handleSkillsCommand(args string) (tea.Model, tea.Cmd) {
 	if fields := strings.Fields(args); len(fields) == 2 && fields[0] == "import" {
 		return m.handleSkillsImport(fields[1])
+	} else if len(fields) == 2 && fields[0] == "remove" {
+		return m.handleSkillsRemove(fields[1])
 	} else if len(fields) != 0 {
-		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "usage: /skills [import codex|claude|pi]"}))
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "usage: /skills [import codex|claude|pi | remove <name>]"}))
 		return *m, nil
 	}
 	skills := m.opts.Skills.List()
@@ -274,24 +279,10 @@ func (m *chatModel) handleSkillsImport(source string) (tea.Model, tea.Cmd) {
 	}
 
 	if len(result.Imported) != 0 || len(result.Existing) != 0 {
-		reload := m.opts.ReloadSkills
-		if reload == nil {
-			reload = func() (*coreagent.SkillCatalog, error) {
-				return coreagent.LoadDefaultSkills(m.currentWorkingDir())
-			}
-		}
-		catalog, err := reload()
-		if err != nil {
+		if _, err := m.refreshSkillsCatalog(); err != nil {
 			m.status = "error"
 			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("%s\n\nCould not reload skills: %v", skillsImportSummary(result), err)}))
 			return *m, nil
-		}
-		m.opts.Skills = catalog
-		if m.opts.ToolRegistryForModel != nil && m.opts.Model != "" {
-			m.opts.Tools = m.opts.ToolRegistryForModel(m.ctx, m.opts.Model)
-		}
-		if m.opts.SystemPromptForModel != nil {
-			m.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, m.opts.Model, m.opts.Tools, m.opts.ToolsDisabled)
 		}
 		m.status = "skills reloaded"
 	}
@@ -314,6 +305,97 @@ func skillsImportSummary(result coreagent.SkillImportResult) string {
 		lines = append(lines, fmt.Sprintf("Skipped %s: %v.", failure.Name, failure.Err))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *chatModel) handleSkillsRemove(name string) (tea.Model, tea.Cmd) {
+	removed, err := coreagent.RemoveSkill(m.currentWorkingDir(), name)
+	if err != nil {
+		m.status = "error"
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Could not remove skill %s: %v", name, err)}))
+		return *m, nil
+	}
+	if _, err := m.refreshSkillsCatalog(); err != nil {
+		m.status = "error"
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Skill removed (%s) but reload failed: %v\nStart a new session if skills look stale.", strings.Join(removed, ", "), err)}))
+		return *m, nil
+	}
+	m.status = "skills reloaded"
+	m.entries = append(m.entries, newSlashEntry(fmt.Sprintf("Removed skill %q from: %s", name, strings.Join(removed, ", "))))
+	return *m, nil
+}
+
+// refreshSkillsCatalog rescans the skill roots and applies the fresh catalog
+// to tools and system prompt. Conversation entries are untouched, so chat
+// context is preserved across the reload.
+func (m *chatModel) refreshSkillsCatalog() (*coreagent.SkillCatalog, error) {
+	reload := m.opts.ReloadSkills
+	if reload == nil {
+		reload = func() (*coreagent.SkillCatalog, error) {
+			return coreagent.LoadDefaultSkills(m.currentWorkingDir())
+		}
+	}
+	catalog, err := reload()
+	if err != nil {
+		return nil, err
+	}
+	m.opts.Skills = catalog
+	m.refreshToolsAndSystem()
+	return catalog, nil
+}
+
+// refreshToolsAndSystem rebuilds the tool registry and system prompt after a
+// runtime change (skill or MCP reload) without touching conversation entries.
+func (m *chatModel) refreshToolsAndSystem() {
+	if m.opts.ToolRegistryForModel != nil && m.opts.Model != "" {
+		m.opts.Tools = m.opts.ToolRegistryForModel(m.ctx, m.opts.Model)
+	}
+	if m.opts.SystemPromptForModel != nil {
+		m.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, m.opts.Model, m.opts.Tools, m.opts.ToolsDisabled)
+	}
+}
+
+func (m *chatModel) handleMCPCommand(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	if len(fields) == 1 && fields[0] == "reload" {
+		if m.opts.ReloadMCPs == nil {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "MCP reload is not available in this session."}))
+			return *m, nil
+		}
+		names, err := m.opts.ReloadMCPs(m.ctx)
+		if err != nil {
+			m.status = "error"
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Could not reload MCP servers: %v\nPrevious connections are kept.", err)}))
+			return *m, nil
+		}
+		m.refreshToolsAndSystem()
+		if len(names) == 0 {
+			m.entries = append(m.entries, newSlashEntry("MCP config has no servers. Add servers to ~/.ollama/mcp.json, then run /mcp reload."))
+		} else {
+			m.entries = append(m.entries, newSlashEntry(fmt.Sprintf("MCP reconnected: %s (tools and system prompt refreshed)", strings.Join(names, ", "))))
+		}
+		return *m, nil
+	}
+	if len(fields) != 0 {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "usage: /mcp [reload]"}))
+		return *m, nil
+	}
+	list := m.opts.MCPServers
+	if list == nil {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "MCP is not available in this session."}))
+		return *m, nil
+	}
+	names, err := list(m.ctx)
+	if err != nil {
+		m.status = "error"
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Could not read MCP config: %v", err)}))
+		return *m, nil
+	}
+	if len(names) == 0 {
+		m.entries = append(m.entries, newSlashEntry("No MCP servers configured in ~/.ollama/mcp.json."))
+	} else {
+		m.entries = append(m.entries, newSlashEntry(fmt.Sprintf("MCP servers in config: %s\nRun /mcp reload to apply changes without restarting.", strings.Join(names, ", "))))
+	}
+	return *m, nil
 }
 
 func skillsDirForDisplay(catalog *coreagent.SkillCatalog) string {

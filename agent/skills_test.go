@@ -514,3 +514,38 @@ func TestImportSkillsRejectsUnreadableManifest(t *testing.T) {
 		t.Fatalf("failures = %#v", result.Failures)
 	}
 }
+
+func TestRemoveSkill(t *testing.T) {
+	userDir := t.TempDir()
+	projectDir := t.TempDir()
+	t.Setenv(SkillsDirEnv, userDir)
+	writeCatalogSkill(t, filepath.Join(projectDir, ".ollama", "skills"), "dup-skill", "project copy")
+	writeCatalogSkill(t, userDir, "dup-skill", "user copy")
+	writeCatalogSkill(t, userDir, "solo-skill", "user only")
+
+	removed, err := RemoveSkill(projectDir, "dup-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 || !strings.Contains(removed[0], filepath.Join(".ollama", "skills")) || removed[1] != filepath.Join(userDir, "dup-skill") {
+		t.Fatalf("removed = %#v", removed)
+	}
+	for _, p := range removed {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists: %v", p, err)
+		}
+	}
+
+	removed, err = RemoveSkill(projectDir, "solo-skill")
+	if err != nil || len(removed) != 1 {
+		t.Fatalf("remove solo = %#v, %v", removed, err)
+	}
+
+	if _, err := RemoveSkill(projectDir, "missing"); err == nil {
+		t.Fatal("want not-found error")
+	}
+	writeCatalogSkill(t, userDir, bundledSkillCreatorName, "bundled copy")
+	if _, err := RemoveSkill(projectDir, bundledSkillCreatorName); err == nil {
+		t.Fatal("bundled skill must be protected from removal")
+	}
+}
