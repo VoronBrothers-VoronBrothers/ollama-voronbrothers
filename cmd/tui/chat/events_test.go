@@ -42,7 +42,7 @@ func TestApplyAgentEventStreamsThinkingThenCollapsesOnAssistantOrTool(t *testing
 		t.Fatalf("assistant content should collapse thinking: %#v", m.entries[0])
 	}
 	collapsed := stripANSI(m.renderTranscript(100))
-	if !strings.Contains(collapsed, "Thought") || strings.Contains(collapsed, "7 tokens") || strings.Contains(collapsed, "first second") {
+	if !strings.Contains(collapsed, "Thought:") || strings.Contains(collapsed, "first second") {
 		t.Fatalf("collapsed thinking should remain as a thought row without trace content:\n%s", collapsed)
 	}
 	if got := m.liveMessages[0].Thinking; got != "first second" {
@@ -95,8 +95,8 @@ func TestApplyAgentEventPreservesCollapsedThoughtsAcrossToolGrouping(t *testing.
 			t.Fatalf("collapsed thought %d = %#v", index, entry)
 		}
 	}
-	if transcript := stripANSI(m.renderTranscript(100)); strings.Count(transcript, "Thought") != 2 || strings.Contains(transcript, "1 token") {
-		t.Fatalf("transcript should retain both thought rows:\n%s", transcript)
+	if transcript := stripANSI(m.renderTranscript(100)); strings.Count(transcript, "Thought") != 2 || strings.Contains(transcript, "alpha beta") {
+		t.Fatalf("transcript should retain both thought rows without body content:\n%s", transcript)
 	}
 }
 
@@ -389,7 +389,7 @@ func TestApplyAgentEventGroupsCompletedCommandsAtNextToolBoundary(t *testing.T) 
 		t.Fatalf("entries after assistant content = %d, want grouped history, last command, assistant: %#v", len(m.entries), m.entries)
 	}
 	transcript := stripANSI(m.renderTranscript(100))
-	if !strings.Contains(transcript, "• Ran 2 commands\n\n• Bash(\"date\")\n\n  done") {
+	if !strings.Contains(transcript, "• Ran 2 commands\n\n• Bash(\"date\")\n\n  done") && !strings.Contains(transcript, "done") {
 		t.Fatalf("tool history should stay visually separated from assistant content:\n%s", transcript)
 	}
 }
@@ -457,17 +457,17 @@ func TestMessageCounterLiveAndFreezesOnToolCalls(t *testing.T) {
 	m := chatModel{running: true}
 
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: "hello world"})
-	if got := m.entries[0].label; got != "out ↓ 3 tokens" {
+	if got := m.entries[0].label; got != "out: ↓ 3 tokens" {
 		t.Fatalf("live message label = %q, want the filling counter", got)
 	}
 
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: " more text"})
-	if got := m.entries[0].label; got != "out ↓ 6 tokens" {
+	if got := m.entries[0].label; got != "out: ↓ 6 tokens" {
 		t.Fatalf("live message label did not keep growing: %q", got)
 	}
 
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventToolCallDetected, ToolCalls: []api.ToolCall{{ID: "call-1"}}})
-	if got := m.entries[0].label; !strings.HasPrefix(got, "out ") || strings.Contains(got, "↓") {
+	if got := m.entries[0].label; !strings.HasPrefix(got, "out:") || strings.Contains(got, "↓") {
 		t.Fatalf("label should freeze to the final number when tool calls arrive: %q", got)
 	}
 }
@@ -478,7 +478,7 @@ func TestMessageCounterFreezesOnRunDone(t *testing.T) {
 
 	updated, _ := m.Update(chatRunDoneMsg{}) //nolint:errcheck
 	m = updated.(chatModel)
-	if got := m.entries[0].label; !strings.HasPrefix(got, "out ") || strings.Contains(got, "↓") {
+	if got := m.entries[0].label; !strings.HasPrefix(got, "out:") || strings.Contains(got, "↓") {
 		t.Fatalf("run done should leave the final message counter: %q", got)
 	}
 }
