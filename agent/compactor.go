@@ -228,6 +228,8 @@ func ResolveCompactionThreshold(configured float64) float64 {
 }
 
 func (c *SimpleCompactor) summarize(ctx context.Context, req CompactionRequest, previousSummary string, archive []api.Message) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, modelCallTimeout)
+	defer cancel()
 	body, err := compactionPrompt(previousSummary, archive, c.compactionPromptBodyBudgetTokens(req.Options))
 	if err != nil {
 		return "", err

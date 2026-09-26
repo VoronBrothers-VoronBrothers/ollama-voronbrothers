@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,7 +30,20 @@ type Session struct {
 	ApprovalState    *ApprovalState
 	WorkingDir       string
 	Compactor        Compactor
+	// PushbackCount tracks how many times the model has delayed compaction via
+	// [[COMPACT_PUSHBACK]] during this session's lifetime. Once it reaches
+	// MaxCompactionPushbacks, subsequent compactions are forced regardless of
+	// context fill percentage.
+	PushbackCount int
+
+	// postCompactEstimate holds the estimated prompt size right after a
+	// successful compaction (touched only from the single Run goroutine).
+	// It feeds the re-trigger guard in doPreCompactGuard so that the retained
+	// keepUserTurns tail cannot cause micro-compactions every step.
+	postCompactEstimate int
 }
+
+const modelCallTimeout = 15 * time.Minute
 
 type RunOptions struct {
 	ChatID       string
@@ -335,8 +349,13 @@ func (s *Session) runCompactionStep(ctx context.Context, st *runState) error {
 	var err error
 	if st.toolBatch != nil && len(st.toolBatch.overflows) > 0 {
 		st.messages, st.compactionSkipNotified, err = s.compactForToolOutputOverflow(ctx, st.runID, opts, st.messages, st.latest, st.assistant, st.toolBatch.messages, st.toolBatch.overflows, st.compactionSkipNotified)
-	} else {
+	} else if skip := s.doPreCompactGuard(ctx, st, meta); !skip {
+		preLen := len(st.messages)
 		st.messages, st.compactionSkipNotified, err = s.maybeCompact(ctx, st.runID, opts, st.messages, st.latest, st.compactionSkipNotified)
+		if err == nil && len(st.messages) != preLen {
+			s.postCompactEstimate = s.estimateRunPromptTokens(opts, st.messages)
+			s.injectPostCompactionReminder(st)
+		}
 	}
 	if err != nil {
 		s.emit(newErrorEvent(meta, err.Error()))
@@ -368,6 +387,141 @@ func (s *Session) runCompactionStep(ctx context.Context, st *runState) error {
 	return nil
 }
 
+// doPreCompactGuard runs the pre-compaction model round when compaction is
+// due but not yet forced. It returns true to skip the actual maybeCompact
+// call this cycle (pushback), and false to proceed with compaction.
+func (s *Session) doPreCompactGuard(ctx context.Context, st *runState, meta eventMetadata) bool {
+	if s.Compactor == nil {
+		return false
+	}
+	opts := st.opts
+
+	req := s.compactionRequest(st.runID, opts, st.messages, st.latest)
+	trigger, shouldCompact := s.Compactor.ShouldCompact(req)
+	_ = trigger
+	if !shouldCompact {
+		return false // not yet due
+	}
+
+	// Forced compaction: context >= 95% or pushback budget exhausted.
+	if s.isForcedCompaction(opts, st.messages) || s.PushbackCount >= MaxCompactionPushbacks {
+		return false
+	}
+
+	notesPath := CompactNotesPath(st.opts.ChatID)
+	fillPct := s.contextFillPercent(opts, st.messages)
+
+	// Inject the pre-compaction user message.
+	// Re-trigger guard: right after a compaction the estimate often still
+	// sits at/above threshold because keepUserTurns keeps recent large turns
+	// in the suffix. Skip this cycle without burning pre-rounds until enough
+	// new content has accumulated since the last compaction (~1/4 of window).
+	if s.postCompactEstimate > 0 {
+		window := s.contextWindowTokens(opts)
+		if window > 0 && s.estimateRunPromptTokens(opts, st.messages) < s.postCompactEstimate+window/4 {
+			return true
+		}
+	}
+
+	st.messages = append(st.messages, api.Message{
+		Role:    "user",
+		Content: compactNotesInstruction(notesPath, fillPct),
+	})
+
+	// Run up to MaxPreCompactRounds inline model rounds with tools available so
+	// the model can Write its notes. A single round is not enough: a small model
+	// may announce "I'll save these now" without emitting the tool call on that
+	// turn, in which case compaction would wipe that intent along with context.
+	// We keep nudging until it actually acts (writes), explicitly reads ready,
+	// or pushes back; then we always proceed to compaction. Bounded so no hang.
+	for round := 0; round < MaxPreCompactRounds; round++ {
+		if round > 0 {
+			st.messages = append(st.messages, api.Message{
+				Role: "user",
+				Content: "[System] No write tool call has been made yet. Save your notes with the write tool now, or reply [[COMPACT_READY]] to proceed with compaction.",
+			})
+		}
+
+		assistant, pendingToolCalls, canceled, err := s.chatRound(ctx, st.runID, opts, st.messages, &st.latest)
+		if err != nil {
+			return false // pre-compact error → proceed with regular compaction
+		}
+		if !messageEmpty(assistant) {
+			st.messages = append(st.messages, assistant)
+		}
+
+		// Did the model act (call a tool)? If so it persisted something; stop.
+		executed := false
+		if len(pendingToolCalls) > 0 && !canceled && !s.DisableTools {
+			batch, toolErr := s.executeToolCalls(ctx, st.runID, opts, st.messages, pendingToolCalls)
+			if toolErr != nil {
+				return false
+			}
+			st.messages = append(st.messages, batch.messages...)
+			executed = true
+		}
+
+		pushedBack, foundMarker := checkCompactPushback(assistant.Content)
+		switch {
+		case executed:
+			// Notes written (a tool ran) → proceed to compaction.
+			return false
+		case pushedBack && s.PushbackCount < MaxCompactionPushbacks:
+			s.PushbackCount++
+			return true // skip compaction this cycle
+		case foundMarker:
+			// Model explicitly readies (READY, or PUSHBACK budget exhausted).
+			// Even without a write it is its explicit decision → proceed.
+			return false
+		default:
+			// No tool call and no marker — the model likely announced intent
+			// without acting. Loop for another round (bounded) instead of
+			// compacting on an empty pre-round; a nudge fires from round 2+.
+		}
+	}
+
+	// Exhausted rounds → proceed with compaction anyway.
+	return false
+}
+
+// isForcedCompaction reports whether context fill has reached the forced
+// threshold (95%) and pre-compaction should be skipped entirely.
+func (s *Session) isForcedCompaction(opts RunOptions, messages []api.Message) bool {
+	ctxWindow := s.contextWindowTokens(opts)
+	if ctxWindow <= 0 {
+		return false
+	}
+	estimated := s.estimateRunPromptTokens(opts, messages)
+	fillRatio := float64(estimated) / float64(ctxWindow)
+	return fillRatio >= ForcedCompactionThreshold
+}
+
+// contextFillPercent returns the approximate percentage of the context window
+// currently filled by the message history.
+func (s *Session) contextFillPercent(opts RunOptions, messages []api.Message) int {
+	ctxWindow := s.contextWindowTokens(opts)
+	if ctxWindow <= 0 {
+		return 80 // fallback
+	}
+	estimated := s.estimateRunPromptTokens(opts, messages)
+	return int(float64(estimated)/float64(ctxWindow)*100 + 0.5)
+}
+
+// injectPostCompactionReminder appends a system message to st.messages after
+// compaction if the notes file exists on disk, so the model knows its pre-
+// compaction notes are available.
+func (s *Session) injectPostCompactionReminder(st *runState) {
+	notesPath := CompactNotesPath(st.opts.ChatID)
+	info, err := os.Stat(notesPath)
+	if err != nil || info.Size() == 0 {
+		return // no notes written — nothing to remind about
+	}
+	st.messages = append(st.messages, api.Message{
+		Role:    "user",
+		Content: fmt.Sprintf("[System] Context has been compacted. Your pre-compaction notes are saved at %s (up to 2KB). Review that file if you need details from before compaction.", notesPath),
+	})
+}
+
 func (s *Session) finishRun(ctx context.Context, st *runState) (*RunResult, error) {
 	if st.finish.status != "" {
 		event := newRunFinished(newEventMetadata(st.runID, st.opts), st.finish.status)
@@ -385,6 +539,8 @@ func (s *Session) finishRun(ctx context.Context, st *runState) (*RunResult, erro
 }
 
 func (s *Session) chatRound(ctx context.Context, runID string, opts RunOptions, messages []api.Message, latest *api.ChatResponse) (api.Message, []api.ToolCall, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, modelCallTimeout)
+	defer cancel()
 	meta := newEventMetadata(runID, opts)
 	var tools api.Tools
 	if !s.DisableTools {
