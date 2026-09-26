@@ -1642,23 +1642,23 @@ func TestChatAssistantMessageShowsLiveOutCounter(t *testing.T) {
 	if got := messageActivityLabel(0); got != "" {
 		t.Fatalf("empty counter should render no label: %q", got)
 	}
-	for tokens, want := range map[int]string{7: "out ↓ 7 tokens", 1234: "out ↓ 1234 tokens"} {
+	for tokens, want := range map[int]string{7: "out: ↓ 7 tokens", 1234: "out: ↓ 1234 tokens"} {
 		if got := messageActivityLabel(tokens); got != want {
 			t.Fatalf("messageActivityLabel(%d) = %q, want %q", tokens, got, want)
 		}
 	}
 
 	m := chatModel{entries: []chatEntry{
-		{role: "assistant", label: "out ↓ 7 tokens", outputTokens: 7, content: "Here's the result."},
+		{role: "assistant", label: "out: ↓ 7 tokens", outputTokens: 7, content: "Here's the result."},
 	}}
 	lines := strings.Split(stripANSI(m.renderTranscript(80)), "\n")
-	if len(lines) < 2 || lines[0] != "• out ↓ 7 tokens" {
+	if len(lines) < 2 || lines[0] != "• out: ↓ 7 tokens" {
 		t.Fatalf("live assistant message should render its filling counter: %#v", lines)
 	}
 
 	m.finalizeMessageLabel(0)
 	lines = strings.Split(stripANSI(m.renderTranscript(80)), "\n")
-	if m.entries[0].label != "out 7 tokens" || lines[0] != "• out 7 tokens" {
+	if m.entries[0].label != "out: 7 tokens" || lines[0] != "• out: 7 tokens" {
 		t.Fatalf("finalized counter should stay on the message: %q / %#v", m.entries[0].label, lines)
 	}
 
@@ -2310,7 +2310,7 @@ func TestRenderMarkdownTablePreservesValidSeparator(t *testing.T) {
 
 func TestTokensNoteFromResponse(t *testing.T) {
 	resp := api.ChatResponse{DoneReason: "stop", Metrics: api.Metrics{PromptEvalCount: 100, EvalCount: 7}}
-	if got := tokensNoteFromResponse(resp, false, 0, 7); got != "⏹ остановка: спец-символ • prompt 100 • out 7" {
+	if got := tokensNoteFromResponse(resp, false, 0, 7); got != "⏹ остановка: спец-символ • prompt 100 • out: 7" {
 		t.Fatalf("note = %q", got)
 	}
 	var cached int = 42
@@ -2321,21 +2321,21 @@ func TestTokensNoteFromResponse(t *testing.T) {
 	// out uses the run's assistant-text total (all rounds), not EvalCount:
 	// a round with thinking+tools counted in EvalCount must not inflate out.
 	respOut := api.ChatResponse{DoneReason: "stop", Metrics: api.Metrics{PromptEvalCount: 300, EvalCount: 950}}
-	if got := tokensNoteFromResponse(respOut, false, 0, 42); !strings.Contains(got, "out 42") || strings.Contains(got, "out 950") {
+	if got := tokensNoteFromResponse(respOut, false, 0, 42); !strings.Contains(got, "out: 42") || strings.Contains(got, "out: 950") {
 		t.Fatalf("note = %q", got)
 	}
 	// no assistant text at all (tools only): the out part is omitted.
-	if got := tokensNoteFromResponse(respOut, false, 0, 0); strings.Contains(got, "out ") {
+	if got := tokensNoteFromResponse(respOut, false, 0, 0); strings.Contains(got, "out: ") {
 		t.Fatalf("note = %q", got)
 	}
 	// thinking phase completed normally: count shown, no truncation marker.
 	resp2 := api.ChatResponse{DoneReason: "stop", Metrics: api.Metrics{PromptEvalCount: 100, EvalCount: 7}}
-	if got := tokensNoteFromResponse(resp2, false, 512, 13); !strings.Contains(got, "разм. 512") || strings.Contains(got, "оборваны") {
+	if got := tokensNoteFromResponse(resp2, false, 512, 13); !strings.Contains(got, "think: 512") || strings.Contains(got, "оборваны") {
 		t.Fatalf("note = %q", got)
 	}
 	// thinking was still running when a length limit stopped generation.
 	resp3 := api.ChatResponse{DoneReason: "length", Metrics: api.Metrics{PromptEvalCount: 100, EvalCount: 900}}
-	if got := tokensNoteFromResponse(resp3, true, 800, 120); !strings.Contains(got, "разм. 800 (оборваны)") || !strings.Contains(got, "остановка: лимит длины") {
+	if got := tokensNoteFromResponse(resp3, true, 800, 120); !strings.Contains(got, "think: 800 (оборваны)") || !strings.Contains(got, "остановка: лимит длины") {
 		t.Fatalf("note = %q", got)
 	}
 	if got := stopReasonLabel("length"); got != "остановка: лимит длины" {
@@ -2346,11 +2346,11 @@ func TestTokensNoteFromResponse(t *testing.T) {
 	}
 
 	// Per-message note: explicit per-round counter wins over content fallback.
-	if got := outputNoteForEntry(&chatEntry{role: "assistant", content: "hello world", outputTokens: 9}); got != "out 9" {
+	if got := outputNoteForEntry(&chatEntry{role: "assistant", content: "hello world", outputTokens: 9}); got != "out: 9" {
 		t.Fatalf("note = %q", got)
 	}
 	// Fallback to approximate count when no per-delta counter was captured.
-	if got := outputNoteForEntry(&chatEntry{role: "assistant", content: "hello world"}); !strings.HasPrefix(got, "out ") {
+	if got := outputNoteForEntry(&chatEntry{role: "assistant", content: "hello world"}); !strings.HasPrefix(got, "out: ") {
 		t.Fatalf("note = %q", got)
 	}
 	// Empty message produces no note at all.

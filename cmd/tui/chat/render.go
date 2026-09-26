@@ -37,6 +37,7 @@ type chatEntry struct {
 	tokenCount   int
 	outputTokens int
 	tokensNote   string
+	stopOnToken  bool
 
 	version     int
 	renderKey   chatEntryRenderKey
@@ -675,10 +676,10 @@ func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkin
 	// out: text tokens of every assistant round in this run (intermediate
 	// reports included); the thinking block and tool calls are not counted.
 	if outputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("out %d", outputTokens))
+		parts = append(parts, fmt.Sprintf("out: %d", outputTokens))
 	}
 	if thinkingTokens > 0 {
-		line := fmt.Sprintf("разм. %d", thinkingTokens)
+		line := fmt.Sprintf("think: %d", thinkingTokens)
 		if wasThinking && response.DoneReason == "length" {
 			line += " (оборваны)"
 		}
@@ -698,7 +699,7 @@ func outputNoteForEntry(entry *chatEntry) string {
 	if count <= 0 {
 		return ""
 	}
-	return "out " + strconv.Itoa(count)
+	return "out: " + strconv.Itoa(count)
 }
 
 // runOutputTotal sums the per-round out counts of this run's assistant
@@ -858,7 +859,7 @@ func liveThinkingTail(content string, limit int) (string, bool) {
 
 func thinkingStatusLine(entry chatEntry) string {
 	if entry.status != "running" {
-		return thoughtLabel(entry.tokenCount, entry.expanded)
+		return thoughtLabel(entry.tokenCount, entry.expanded, entry.stopOnToken)
 	}
 
 	label := "Thinking"
@@ -868,11 +869,15 @@ func thinkingStatusLine(entry chatEntry) string {
 	return label
 }
 
-func thoughtLabel(tokens int, expanded bool) string {
-	if !expanded || tokens <= 0 {
-		return "Thought"
+func thoughtLabel(tokens int, expanded, stopOnToken bool) string {
+	suffix := ""
+	if stopOnToken {
+		suffix = " ◆"
 	}
-	return "Thought (" + formatTokenCount(tokens) + ")"
+	if !expanded || tokens <= 0 {
+		return "Thought" + suffix
+	}
+	return "Thought (" + formatTokenCount(tokens) + ")" + suffix
 }
 
 func (m chatModel) thinkingLabel() string {
@@ -890,7 +895,7 @@ func thinkingActivityLabel(tokens int) string {
 // message while it streams — analogous to a thinking block's "Thinking ↓ N".
 func messageActivityLabel(tokens int) string {
 	if tokens > 0 {
-		return "out ↓ " + formatTokenCount(tokens)
+		return "out: ↓ " + formatTokenCount(tokens)
 	}
 	return ""
 }
@@ -905,7 +910,7 @@ func (m *chatModel) finalizeMessageLabel(idx int) {
 	if entry.role != "assistant" || strings.TrimSpace(entry.label) == "" {
 		return
 	}
-	entry.label = "out " + formatTokenCount(entry.outputTokens)
+	entry.label = "out: " + formatTokenCount(entry.outputTokens)
 	m.markEntryDirty(idx)
 }
 

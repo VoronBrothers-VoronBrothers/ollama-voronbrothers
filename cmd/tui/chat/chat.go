@@ -386,6 +386,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		wasThinking := m.thinking
 		thinkingTokens := m.runThinkingTokens
 		m.finishThinkingEntry()
+		// Mark thinking entry that ended on a stop-token.
+		if wasThinking && len(m.entries) > 0 && m.entries[len(m.entries)-1].role == "thinking" &&
+			msg.result != nil && msg.result.Latest.DoneReason == "stop" {
+			m.entries[len(m.entries)-1].stopOnToken = true
+			m.markEntryDirty(len(m.entries) - 1)
+		}
 		m.running = false
 		m.awaitingModel = false
 		m.compacting = false
