@@ -385,17 +385,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// token note can say whether reasoning was still running at stop.
 		wasThinking := m.thinking
 		thinkingTokens := m.runThinkingTokens
-		// Capture the thinking entry index before finishThinkingEntry resets state.
-		thinkingIdx := -1
-		if wasThinking && len(m.entries) > 0 && m.entries[len(m.entries)-1].role == "thinking" {
-			thinkingIdx = len(m.entries) - 1
-		}
 		m.finishThinkingEntry()
-		// Mark thinking entry that ended on a stop-token (close tag).
-		if thinkingIdx >= 0 && msg.result != nil && msg.result.Latest.DoneReason == "stop" {
-			m.entries[thinkingIdx].stopOnToken = true
-			m.entries[thinkingIdx].endedWithCloseTag = true
-			m.markEntryDirty(thinkingIdx)
+		// Mark ALL thinking entries in this run that ended on a stop-token (close tag).
+		if msg.result != nil && msg.result.Latest.DoneReason == "stop" {
+			for i := m.runStartEntryIdx; i < len(m.entries); i++ {
+				if m.entries[i].role == "thinking" {
+					m.entries[i].stopOnToken = true
+					m.entries[i].endedWithCloseTag = true
+					m.markEntryDirty(i)
+				}
+			}
 		}
 		m.running = false
 		m.awaitingModel = false
