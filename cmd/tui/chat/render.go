@@ -34,10 +34,11 @@ type chatEntry struct {
 	finishedAt   time.Time
 	tools        []chatEntry
 	metrics      *api.Metrics
-	tokenCount   int
-	outputTokens int
-	tokensNote   string
-	stopOnToken  bool
+	tokenCount        int
+	outputTokens      int
+	tokensNote        string
+	stopOnToken       bool
+	endedWithCloseTag bool
 
 	version     int
 	renderKey   chatEntryRenderKey
@@ -859,7 +860,7 @@ func liveThinkingTail(content string, limit int) (string, bool) {
 
 func thinkingStatusLine(entry chatEntry) string {
 	if entry.status != "running" {
-		return thoughtLabel(entry.tokenCount, entry.expanded, entry.stopOnToken)
+		return thoughtLabel(entry.tokenCount, entry.expanded, entry.stopOnToken, entry.endedWithCloseTag)
 	}
 
 	label := "Thinking"
@@ -869,15 +870,21 @@ func thinkingStatusLine(entry chatEntry) string {
 	return label
 }
 
-func thoughtLabel(tokens int, expanded, stopOnToken bool) string {
+func thoughtLabel(tokens int, expanded bool, stopOnToken bool, endedWithCloseTag bool) string {
 	suffix := ""
 	if stopOnToken {
 		suffix = " ◆"
 	}
-	if !expanded || tokens <= 0 {
+	if endedWithCloseTag {
+		suffix += " ⁂"
+	}
+	if tokens <= 0 && suffix != "" {
 		return "Thought" + suffix
 	}
-	return "Thought (" + formatTokenCount(tokens) + ")" + suffix
+	if tokens <= 0 {
+		return "Thought"
+	}
+	return "Thought: " + formatTokenCount(tokens) + suffix
 }
 
 func (m chatModel) thinkingLabel() string {
@@ -959,6 +966,7 @@ func (m *chatModel) finishThinkingEntry() {
 	m.entries[idx].expanded = m.thinkingDetailsOpen
 	m.markEntryDirty(idx)
 }
+
 
 func toolGroupChildStatusLine(entry chatEntry) string {
 	label := toolGroupChildStatusLabel(entry)
