@@ -41,9 +41,25 @@ type chatCompactProgressMsg struct {
 	tokens int
 }
 
+// markThinkingEndedWithCloseTag flags the running thinking entry as closed by
+// a </thinking> tag, so its finished render shows the ⁂ symbol.
+func (m *chatModel) markThinkingEndedWithCloseTag() {
+	if m.thinking && len(m.entries) > 0 {
+		last := &m.entries[len(m.entries)-1]
+		if last.role == "thinking" && last.status == "running" {
+			last.endedWithCloseTag = true
+		}
+	}
+}
+
 // resetStreamingState clears the transient streaming flags that every
 // non-streaming event resets before applying its own state.
 func (m *chatModel) resetStreamingState() {
+	// If a thinking entry is still running, the model just closed its
+	// </thinking> tag (that's what triggered the assistant transition).
+	// Mark it as ended-with-close-tag BEFORE finishThinkingEntry finalizes it,
+	// so the first "done" render includes the ⁂ symbol.
+	m.markThinkingEndedWithCloseTag()
 	m.finishThinkingEntry()
 	m.awaitingModel = false
 	m.thinking = false
@@ -120,6 +136,9 @@ func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 		m.liveMessages[msgIdx].Content += event.Content
 		contextChanged = true
 	case coreagent.EventToolCallDetected:
+		// Tool call right after thinking: close tag already arrived, so mark
+		// the thinking entry with ⁂ before it gets finalized.
+		m.markThinkingEndedWithCloseTag()
 		m.finishThinkingEntry()
 		// The text block of this round is closed once the tool calls are detected,
 		// so freeze its live "out ↓ N" counter into the final number.

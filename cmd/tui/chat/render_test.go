@@ -1583,8 +1583,8 @@ func TestChatCtrlOTogglesCompletedThinkingDetails(t *testing.T) {
 		},
 	}
 
-	if view := stripANSI(m.renderTranscript(100)); !strings.Contains(view, "Thought") || strings.Contains(view, "12 tokens") {
-		t.Fatalf("collapsed thinking should hide its token count:\n%s", view)
+	if view := stripANSI(m.renderTranscript(100)); !strings.Contains(view, "Thought: 12 tokens") {
+		t.Fatalf("collapsed thinking should show its token count:\n%s", view)
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
@@ -1592,7 +1592,7 @@ func TestChatCtrlOTogglesCompletedThinkingDetails(t *testing.T) {
 	if !m.thinkingDetailsOpen || !m.entries[0].expanded {
 		t.Fatalf("ctrl+o should expand completed thinking entries: %#v", m.entries[0])
 	}
-	if view := stripANSI(m.renderTranscript(100)); !strings.Contains(view, "Thought (12 tokens)") || !strings.Contains(view, "private reasoning") {
+	if view := stripANSI(m.renderTranscript(100)); !strings.Contains(view, "Thought: 12 tokens") || !strings.Contains(view, "private reasoning") {
 		t.Fatalf("ctrl+o should render completed thinking content:\n%s", view)
 	}
 
@@ -1623,7 +1623,7 @@ func TestChatThinkingBodyUsesSecondaryGrey(t *testing.T) {
 		header string
 	}{
 		{entry: chatEntry{role: "thinking", status: "running", content: "Let me inspect the files.", expanded: true}, header: "Thinking"},
-		{entry: chatEntry{role: "thinking", status: "done", content: "Let me inspect the files.", tokenCount: 15, expanded: true}, header: "Thought (15 tokens)"},
+		{entry: chatEntry{role: "thinking", status: "done", content: "Let me inspect the files.", tokenCount: 15, expanded: true}, header: "Thought: 15 tokens"},
 	} {
 		lines := renderThinkingLines(tt.entry, 80)
 		if len(lines) < 3 {
@@ -1678,7 +1678,7 @@ func TestChatThinkingBodyAlignsWithStatusText(t *testing.T) {
 	if len(lines) < 3 {
 		t.Fatalf("thinking entry did not render its body: %#v", lines)
 	}
-	if got, want := lines[0], "• Thought (15 tokens)"; got != want {
+	if got, want := lines[0], "• Thought: 15 tokens"; got != want {
 		t.Fatalf("thinking header = %q, want %q", got, want)
 	}
 	if got, want := lines[2], "  Let me inspect the files."; got != want {
