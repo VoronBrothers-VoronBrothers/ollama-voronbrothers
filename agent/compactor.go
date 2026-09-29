@@ -131,7 +131,7 @@ func (c *SimpleCompactor) MaybeCompact(ctx context.Context, req CompactionReques
 		return result, nil
 	}
 
-	compacted := make([]api.Message, 0, len(prefix)+len(suffix)+2)
+	compacted := make([]api.Message, 0, len(prefix)+len(suffix)+1)
 	compacted = append(compacted, prefix...)
 	compacted = append(compacted, CompactionSummaryMessages(summary, req.ContinueTask)...)
 	compacted = append(compacted, suffix...)
@@ -301,8 +301,8 @@ func isUnsupportedCompactionThinkError(err error) bool {
 	return strings.Contains(text, "does not support") || strings.Contains(text, "not supported") || strings.Contains(text, "unsupported")
 }
 
-// compactionSummaryMessageForTask renders a compaction summary as the content
-// string stored on the synthetic tool-result message.
+// compactionSummaryMessageForTask renders the summary text with optional
+// continuation instruction.
 func compactionSummaryMessageForTask(summary string, continueTask bool) string {
 	content := CompactionSummaryMessagePrefix + strings.TrimSpace(summary)
 	if continueTask {
@@ -311,25 +311,15 @@ func compactionSummaryMessageForTask(summary string, continueTask bool) string {
 	return content
 }
 
-// CompactionSummaryMessages renders a compaction summary as the assistant
-// tool-call plus tool-result pair that represents a compacted turn in the
-// message history.
+// CompactionSummaryMessages renders a compaction summary as a single user
+// message that represents the compacted turn in the message history. Using a
+// plain user message (instead of a synthetic tool-call pair) avoids confusing
+// backends that reject references to undefined tools.
 func CompactionSummaryMessages(summary string, continueTask bool) []api.Message {
 	return []api.Message{
 		{
-			Role: "assistant",
-			ToolCalls: []api.ToolCall{{
-				ID: CompactionToolCallID,
-				Function: api.ToolCallFunction{
-					Name: CompactionToolName,
-				},
-			}},
-		},
-		{
-			Role:       "tool",
-			ToolName:   CompactionToolName,
-			ToolCallID: CompactionToolCallID,
-			Content:    compactionSummaryMessageForTask(summary, continueTask),
+			Role:    "user",
+			Content: compactionSummaryMessageForTask(summary, continueTask),
 		},
 	}
 }

@@ -1480,19 +1480,16 @@ func TestSessionCompactsThenReattachesFullyOmittedToolResult(t *testing.T) {
 	}
 
 	nextRequestMessages := client.requests[2].Messages
-	if len(nextRequestMessages) != 4 {
-		t.Fatalf("next model request messages = %#v, want summary pair plus tool call/result", nextRequestMessages)
+	if len(nextRequestMessages) != 3 {
+		t.Fatalf("next model request messages = %#v, want summary plus tool call/result", nextRequestMessages)
 	}
-	if nextRequestMessages[0].Role != "assistant" || len(nextRequestMessages[0].ToolCalls) != 1 || nextRequestMessages[0].ToolCalls[0].Function.Name != CompactionToolName {
-		t.Fatalf("first message should be compaction summary tool call: %#v", nextRequestMessages[0])
+	if nextRequestMessages[0].Role != "user" || !strings.Contains(nextRequestMessages[0].Content, "older history summarized") {
+		t.Fatalf("first message should be compaction summary: %#v", nextRequestMessages[0])
 	}
-	if nextRequestMessages[1].Role != "tool" || nextRequestMessages[1].ToolName != CompactionToolName || !strings.Contains(nextRequestMessages[1].Content, "older history summarized") {
-		t.Fatalf("second message should be compaction summary result: %#v", nextRequestMessages[1])
+	if nextRequestMessages[1].Role != "assistant" || len(nextRequestMessages[1].ToolCalls) != 1 || nextRequestMessages[1].ToolCalls[0].ID != "call-1" {
+		t.Fatalf("second message should be original assistant tool call: %#v", nextRequestMessages[1])
 	}
-	if nextRequestMessages[2].Role != "assistant" || len(nextRequestMessages[2].ToolCalls) != 1 || nextRequestMessages[2].ToolCalls[0].ID != "call-1" {
-		t.Fatalf("third message should be original assistant tool call: %#v", nextRequestMessages[2])
-	}
-	toolResult := nextRequestMessages[3]
+	toolResult := nextRequestMessages[2]
 	if toolResult.Role != "tool" || toolResult.ToolName != "large_tool" || toolResult.ToolCallID != "call-1" {
 		t.Fatalf("fourth message should be reattached large tool result: %#v", toolResult)
 	}
