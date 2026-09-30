@@ -194,7 +194,7 @@ func (r *Qwen35Renderer) validateMessages(messages []api.Message) error {
 		}
 	}
 	if !foundUserQuery {
-		return fmt.Errorf("no user query found in messages")
+		slog.Warn("all user messages are tool_responses, proceeding anyway")
 	}
 
 	return nil
