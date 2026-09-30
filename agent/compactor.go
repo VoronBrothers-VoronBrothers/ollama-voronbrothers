@@ -28,7 +28,30 @@ const (
 
 	maxCompactionSummaryRunes = 16 * 1024
 
-	compactionSystemPrompt = "Summarize the archived part of an Ollama agent conversation. Preserve user goals, decisions, files, commands, tool results, and unresolved tasks needed to continue. Omit private reasoning and return only the summary."
+	compactionSystemPrompt = `Summarize the archived part of an agent conversation in bullet-point style. Use this structure:
+
+## Task
+One line: what the user is trying to accomplish.
+
+## Stage
+What stage of the solution we are at now (e.g. "debugging", "writing tests", "ready to commit"). One line.
+
+## Tried
+- Bullet points of what was attempted, one per bullet, max 12 words each.
+  Include failed attempts and their outcomes briefly.
+
+## Files & Commands
+- Key files modified/created (paths only).
+- Important commands run (one line each).
+
+## Next Steps
+- What remains unresolved or what to do next.
+
+Rules:
+- Bullet-point style throughout. No paragraphs longer than 2 sentences.
+- Omit private reasoning and chain-of-thought.
+- If a previous summary exists, merge into it: update Stage/Tried/Next Steps, keep old bullets that are still relevant, do not repeat them verbatim.
+- Total output must fit within 1500 tokens.`
 )
 
 type Compactor interface {
