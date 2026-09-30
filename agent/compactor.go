@@ -23,7 +23,7 @@ const (
 const (
 	defaultCompactionContextWindowTokens = 32768
 	defaultCompactionKeepUserTurns       = 3
-	defaultCompactionThreshold           = 0.8
+	defaultCompactionThreshold           = 0.75
 	compactOnlySummaryContextTokens      = 16000
 
 	maxCompactionSummaryRunes = 16 * 1024
@@ -90,6 +90,7 @@ type CompactionRequest struct {
 	Force         bool
 	ContinueTask  bool
 	KeepUserTurns *int
+	KeepLastCount *int // keep the last N messages untouched (post-tool mode)
 	Progress      func(CompactionProgress)
 }
 
@@ -129,7 +130,11 @@ func (c *SimpleCompactor) MaybeCompact(ctx context.Context, req CompactionReques
 	if req.KeepUserTurns != nil {
 		keepUserTurns = *req.KeepUserTurns
 	}
-	prefix, previousSummary, archive, suffix, _, ok := splitCompactionMessages(req.Messages, keepUserTurns)
+	keepLastCount := 0
+	if req.KeepLastCount != nil {
+		keepLastCount = *req.KeepLastCount
+	}
+	prefix, previousSummary, archive, suffix, _, ok := splitCompactionMessages(req.Messages, keepUserTurns, keepLastCount)
 	if !ok || len(archive) == 0 {
 		result.Reason = "nothing to compact"
 		return result, nil
@@ -547,7 +552,7 @@ func largestCompactionContentMessage(messages []api.Message) int {
 	return idx
 }
 
-func splitCompactionMessages(messages []api.Message, keepUserTurns int) (prefix []api.Message, previousSummary string, archive []api.Message, suffix []api.Message, keptUserTurns int, ok bool) {
+func splitCompactionMessages(messages []api.Message, keepUserTurns int, keepLastCount int) (prefix []api.Message, previousSummary string, archive []api.Message, suffix []api.Message, keptUserTurns int, ok bool) {
 	if keepUserTurns < 0 {
 		keepUserTurns = defaultCompactionKeepUserTurns
 	}
@@ -573,6 +578,18 @@ func splitCompactionMessages(messages []api.Message, keepUserTurns int) (prefix 
 			continue
 		}
 		candidates = append(candidates, msg)
+	}
+
+	// Post-tool mode: keep the last N candidates untouched.
+	if keepLastCount > 0 {
+		if len(candidates) <= keepLastCount {
+			return prefix, previousSummary, nil, nil, keptUserTurns, false
+		}
+		suffixStart := len(candidates) - keepLastCount
+		if suffixStart <= 0 || len(candidates[:suffixStart]) == 0 {
+			return prefix, previousSummary, nil, nil, keptUserTurns, false
+		}
+		return prefix, previousSummary, candidates[:suffixStart], candidates[suffixStart:], 0, true
 	}
 
 	userTurnIndexes := make([]int, 0, keepUserTurns)

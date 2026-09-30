@@ -333,11 +333,11 @@ func (s *Session) runCompactionStep(ctx context.Context, st *runState) error {
 	opts := st.opts
 	meta := newEventMetadata(st.runID, opts)
 	var err error
-	if st.toolBatch != nil && len(st.toolBatch.overflows) > 0 {
-		st.messages, st.compactionSkipNotified, err = s.compactForToolOutputOverflow(ctx, st.runID, opts, st.messages, st.latest, st.assistant, st.toolBatch.messages, st.toolBatch.overflows, st.compactionSkipNotified)
-	} else {
-		st.messages, st.compactionSkipNotified, err = s.maybeCompact(ctx, st.runID, opts, st.messages, st.latest, st.compactionSkipNotified)
+	keepLast := 0
+	if st.toolBatch != nil {
+		keepLast = len(st.toolBatch.messages) + 1 // assistant tool_call msg + tool responses
 	}
+	st.messages, st.compactionSkipNotified, err = s.maybeCompact(ctx, st.runID, opts, st.messages, st.latest, keepLast, st.compactionSkipNotified)
 	if err != nil {
 		s.emit(newErrorEvent(meta, err.Error()))
 		st.finishError(err)
@@ -713,11 +713,15 @@ func isContextCanceledError(ctx context.Context, err error) bool {
 	return ctx != nil && errors.Is(ctx.Err(), context.Canceled) && strings.Contains(err.Error(), "context canceled")
 }
 
-func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse, skipNotified bool) ([]api.Message, bool, error) {
+func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse, keepLastCount int, skipNotified bool) ([]api.Message, bool, error) {
 	if s.Compactor == nil {
 		return messages, skipNotified, nil
 	}
 	req := s.compactionRequest(runID, opts, messages, latest)
+	if keepLastCount > 0 {
+		v := keepLastCount
+		req.KeepLastCount = &v
+	}
 	trigger := s.autoCompactionTrigger(req)
 	if trigger != "" {
 		s.emitCompactionStarted(runID, opts, trigger)
@@ -750,65 +754,7 @@ func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOption
 	return result.Messages, skipNotified, nil
 }
 
-func (s *Session) compactForToolOutputOverflow(ctx context.Context, runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse, assistant api.Message, toolMessages []api.Message, overflows []toolOutputOverflow, skipNotified bool) ([]api.Message, bool, error) {
-	if s.Compactor == nil {
-		return messages, skipNotified, nil
-	}
 
-	keepUserTurns := 0
-	req := s.compactionRequest(runID, opts, messages, latest)
-	req.Force = true
-	req.KeepUserTurns = &keepUserTurns
-	s.emitCompactionStarted(runID, opts, CompactionTriggerToolOutput)
-
-	result, err := s.Compactor.MaybeCompact(ctx, req)
-	if err != nil {
-		if result.Due && !skipNotified {
-			s.emitCompactionSkipped(runID, opts, CompactionTriggerToolOutput, result.Reason)
-			skipNotified = true
-		}
-		return messages, skipNotified, nil
-	}
-	if !result.Compacted {
-		if result.Due && !skipNotified {
-			s.emitCompactionSkipped(runID, opts, CompactionTriggerToolOutput, result.Reason)
-			skipNotified = true
-		}
-		return messages, skipNotified, nil
-	}
-
-	overflowByID := make(map[string]toolOutputOverflow, len(overflows))
-	for _, overflow := range overflows {
-		overflowByID[overflow.toolCallID] = overflow
-	}
-
-	compacted := append([]api.Message(nil), result.Messages...)
-	if !messageEmpty(assistant) {
-		compacted = append(compacted, assistant)
-	}
-
-	historyTokens := s.estimateRunPromptTokens(opts, compacted)
-	batchTokens := 0
-	for _, msg := range toolMessages {
-		content := msg.Content
-		toolName := msg.ToolName
-		if overflow, ok := overflowByID[msg.ToolCallID]; ok {
-			content = overflow.content
-			if overflow.toolName != "" {
-				toolName = overflow.toolName
-			}
-		}
-		refit := s.toolMessageForPostCompactionContext(toolName, msg.ToolCallID, content, opts, historyTokens+batchTokens)
-		compacted = append(compacted, refit)
-		batchTokens += estimateMessagesTokens([]api.Message{refit})
-	}
-
-	s.emitCompacted(runID, opts, compacted, CompactionTriggerToolOutput, result.Summary)
-	if err := s.checkPostCompactionPromptBudget(opts, compacted); err != nil {
-		return compacted, skipNotified, err
-	}
-	return compacted, skipNotified, nil
-}
 
 func (s *Session) compactionRequest(runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse) CompactionRequest {
 	meta := newEventMetadata(runID, opts)
