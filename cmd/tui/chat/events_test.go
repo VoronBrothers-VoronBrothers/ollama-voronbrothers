@@ -27,14 +27,19 @@ func TestApplyAgentEventStreamsThinkingThenCollapsesOnAssistantOrTool(t *testing
 
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventThinkingDelta, Thinking: "first "})
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventThinkingDelta, Thinking: "second", Tokens: 7})
-	if len(m.entries) != 1 || m.entries[0].role != "thinking" || !m.entries[0].expanded || m.entries[0].content != "first second" {
+	if len(m.entries) != 1 || m.entries[0].role != "thinking" || m.entries[0].content != "first second" {
 		t.Fatalf("live thinking entry = %#v", m.entries)
 	}
 	if got := m.liveMessages[0].Thinking; got != "first second" {
 		t.Fatalf("live message thinking = %q, want full streamed value", got)
 	}
-	if view := stripANSI(m.renderTranscript(100)); !strings.Contains(view, "Thinking ↓ 7 tokens") || !strings.Contains(view, "first second") {
-		t.Fatalf("live thinking trace missing from transcript:\n%s", view)
+	// Default: thinking details are hidden (expanded=false), only status line shown.
+	view := stripANSI(m.renderTranscript(100))
+	if !strings.Contains(view, "Thinking ↓ 7 tokens") {
+		t.Fatalf("live thinking status missing from transcript:\n%s", view)
+	}
+	if strings.Contains(view, "first second") {
+		t.Fatalf("thinking content should be hidden by default:\n%s", view)
 	}
 
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: "answer"})

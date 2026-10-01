@@ -937,7 +937,7 @@ func (m *chatModel) syncThinkingEntry(content string) {
 	m.entries[idx].label = m.thinkingLabel()
 	m.entries[idx].status = "running"
 	m.entries[idx].tokenCount = m.thinkingTokens
-	m.entries[idx].expanded = true
+	m.entries[idx].expanded = m.thinkingDetailsOpen
 	m.markEntryDirty(idx)
 }
 

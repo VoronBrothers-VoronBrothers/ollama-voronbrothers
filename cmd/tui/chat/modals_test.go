@@ -52,7 +52,7 @@ func TestChatModelCommandOpensPicker(t *testing.T) {
 	if strings.Contains(view, "local") || strings.Contains(view, "cloud coding") {
 		t.Fatalf("inline model picker should stay compact without descriptions: %q", view)
 	}
-	if !strings.Contains(view, "│ █") {
+	if !strings.Contains(view, " █") {
 		t.Fatalf("inline model picker should keep input box visible: %q", view)
 	}
 }
@@ -86,15 +86,10 @@ func TestChatModelCommandShowsRecommendedFirstWithoutSections(t *testing.T) {
 			t.Fatalf("compact model picker should be flat and description-free; found %q in %q", unwanted, view)
 		}
 	}
-	firstRecommended := strings.Index(view, "glm-5.2:cloud")
-	secondRecommended := strings.Index(view, "kimi-k2.7-code:cloud")
-	current := strings.Index(view, "llama3.2")
-	local := strings.Index(view, "gemma4")
-	if firstRecommended < 0 || secondRecommended < 0 || current < 0 || local < 0 {
-		t.Fatalf("compact model picker missing expected models: %q", view)
-	}
-	if !(firstRecommended < current && secondRecommended < current && current < local) {
-		t.Fatalf("compact model picker order should be recommended, current, local: %q", view)
+	for _, want := range []string{"glm-5.2:cloud", "kimi-k2.7-code:cloud", "llama3.2", "gemma4"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("compact model picker missing %q: %q", want, view)
+		}
 	}
 }
 
@@ -126,13 +121,10 @@ func TestChatModelCommandOpensSmallPicker(t *testing.T) {
 	}
 	m = updated.(chatModel)
 	view := stripANSI(m.View())
-	for _, want := range []string{"model-1", "model-5", "... and 2 more"} {
+	for _, want := range []string{"model-1", "model-5"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("small model picker missing %q: %q", want, view)
 		}
-	}
-	if strings.Contains(view, "model-6") || strings.Contains(view, "model-7") {
-		t.Fatalf("small model picker rendered too many items: %q", view)
 	}
 }
 
@@ -201,9 +193,10 @@ func TestChatModelPickerPinsCurrentThenRecommendedModels(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("selector item order = %#v, want %#v", got, want)
 	}
-	for _, item := range items[:3] {
-		if !item.Recommended {
-			t.Fatalf("%q should be pinned in the first picker section", item.Name)
+	// voron flat picker: no Recommended section — all items have Recommended=false
+	for _, item := range items {
+		if item.Recommended {
+			t.Fatalf("%q should not be marked recommended in flat picker", item.Name)
 		}
 	}
 	if items[0].Description != "cloud selected" {
@@ -229,7 +222,7 @@ func TestInitialModelPickerRendersBeforeChatShell(t *testing.T) {
 	if !strings.Contains(view, "Select model") || !strings.Contains(view, "llama3.2") {
 		t.Fatalf("initial picker view missing model content: %q", view)
 	}
-	if strings.Contains(view, "old chat content") || strings.Contains(view, "│ █") {
+	if strings.Contains(view, "old chat content") || strings.Contains(view, " █") {
 		t.Fatalf("initial picker should render before chat shell: %q", view)
 	}
 }

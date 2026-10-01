@@ -66,6 +66,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/очисточередь", description: "clear queued prompts", aliases: []string{"/clear"}},
 	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
+	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
 }
 
@@ -219,6 +220,9 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return *m, nil
 	case command == "/token":
 		return m.handleTokenToggleCommand(args)
+	case command == "/fullthink":
+		m.toggleInlineTranscriptDetails()
+		return *m, nil
 	case command == "/prompt":
 		return m.handlePromptCommand(args)
 	case command == "/save":
