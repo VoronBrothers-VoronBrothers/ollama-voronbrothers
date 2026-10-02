@@ -10,7 +10,7 @@ import (
 )
 
 // errDotInterval — минимальная пауза между отправками точки (анти-спам).
-const errDotInterval = 30 * time.Second
+const errDotInterval = 0 // throttle отключён: на каждую ошибку — своя точка
 
 var lastErrDotUnixNano atomic.Int64
 

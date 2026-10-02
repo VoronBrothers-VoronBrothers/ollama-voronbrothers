@@ -889,11 +889,12 @@ func TestChatSkillSubmitWhileActiveRunKeepsActiveState(t *testing.T) {
 			if got.events != events || got.cancel == nil || got.running != state.running || got.compacting != state.compacting {
 				t.Fatalf("active run state changed: %#v", got)
 			}
-			if string(got.input) != "/release-notes draft notes" {
-				t.Fatalf("input = %q, want skill invocation preserved", got.input)
+			// Skill command is queued (not a known slash command), input cleared.
+			if len(got.pendingPrompts) != 1 || got.pendingPrompts[0] != "/release-notes draft notes" {
+				t.Fatalf("pendingPrompts = %#v, want skill invocation queued", got.pendingPrompts)
 			}
-			if got.status != "wait for current response" {
-				t.Fatalf("status = %q", got.status)
+			if string(got.input) != "" {
+				t.Fatalf("input should be cleared after queuing, got %q", got.input)
 			}
 		})
 	}
@@ -1368,17 +1369,12 @@ func TestChatMessageSubmitWhileRunningPreservesDraft(t *testing.T) {
 		t.Fatal("busy submit should not start a command")
 	}
 	m = updated.(chatModel)
-	if got := string(m.input); got != "next prompt [image 1] [pasted 1]" {
-		t.Fatalf("input = %q, want draft preserved", got)
+	// Message is queued while running; input is cleared.
+	if len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "next prompt [image 1] [pasted 1]" {
+		t.Fatalf("pendingPrompts = %#v, want message queued", m.pendingPrompts)
 	}
-	if m.inputCursor != 4 || !m.inputCursorSet {
-		t.Fatalf("cursor not preserved: cursor=%d set=%v", m.inputCursor, m.inputCursorSet)
-	}
-	if len(m.inputAttachments) != 1 || m.inputAttachments[0].placeholder != attachment.placeholder || m.inputAttachments[0].kind != attachment.kind {
-		t.Fatalf("attachments not preserved: %#v", m.inputAttachments)
-	}
-	if len(m.inputPastedTexts) != 1 || m.inputPastedTexts[0] != pasted {
-		t.Fatalf("pasted text not preserved: %#v", m.inputPastedTexts)
+	if got := string(m.input); got != "" {
+		t.Fatalf("input should be cleared after queuing, got %q", got)
 	}
 	if len(m.entries) != 0 {
 		t.Fatalf("busy submit should not add entries: %#v", m.entries)

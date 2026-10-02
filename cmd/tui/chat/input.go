@@ -65,6 +65,8 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/prompt", description: "show full prompt, tools, and messages", aliases: []string{"/промт", "/промпт"}},
 	{name: "/очисточередь", description: "clear queued prompts", aliases: []string{"/clear"}},
 	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
+	{name: "/heartbeat", usage: "/heartbeat \"текст\"", description: "periodically send a message to AI", aliases: []string{"/авторитм"}},
+	{name: "/heartbeat-time", usage: "/heartbeat-time <секунды>", description: "set heartbeat interval (0=off)", aliases: []string{"/авторитм-тайм"}},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
@@ -218,6 +220,57 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 			}
 		}
 		return *m, nil
+	case command == "/heartbeat-time" || command == "/авторитм-тайм":
+		fields := strings.Fields(args)
+		if len(fields) != 1 {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Использование: /heartbeat-time <секунды>"}))
+			return *m, nil
+		}
+		n, err := strconv.Atoi(fields[0])
+		if err != nil || n < 0 {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Некорректное число секунд"}))
+			return *m, nil
+		}
+		if n == 0 {
+			m.autoSendDuration = 0
+			m.heartbeatMsg = ""
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Heartbeat выключен"}))
+		} else {
+			m.autoSendDuration = time.Duration(n) * time.Second
+			if m.heartbeatMsg == "" {
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Интервал: %d с (текст не задан — используй /heartbeat \"текст\")", n)}))
+			} else {
+				cmd := tea.Tick(time.Duration(n)*time.Second, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat интервал: %d с", n)}))
+				return *m, cmd
+			}
+		}
+		return *m, nil
+	case command == "/heartbeat" || command == "/авторитм":
+		msg := stripQuotes(args)
+		if msg == "" {
+			// No argument: show status or set default
+			if m.heartbeatMsg != "" {
+				dur := int(m.autoSendDuration.Seconds())
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat активен: %q каждые %d с", m.heartbeatMsg, dur)}))
+			} else {
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Использование: /heartbeat \"текст сообщения\""}))
+			}
+			return *m, nil
+		}
+		// Set or update heartbeat message and start timer
+		if m.autoSendDuration == 0 {
+			m.autoSendDuration = 120 * time.Second
+		}
+		prevMsg := m.heartbeatMsg
+		m.heartbeatMsg = msg
+		cmd := tea.Tick(m.autoSendDuration, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+		if prevMsg == "" {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat запущен: %q каждые %d с", msg, int(m.autoSendDuration.Seconds()))}))
+		} else {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat обновлён: %q каждые %d с", msg, int(m.autoSendDuration.Seconds()))}))
+		}
+		return *m, cmd
 	case command == "/token":
 		return m.handleTokenToggleCommand(args)
 	case command == "/fullthink":
@@ -1778,4 +1831,15 @@ func (m chatModel) systemPrompt(extra string) string {
 		parts = append(parts, strings.TrimSpace(extra))
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// stripQuotes removes surrounding single or double quotes from a string.
+func stripQuotes(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }

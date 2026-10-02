@@ -2885,7 +2885,11 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	promptOpts := optionsForPrompt(opts, r)
 	prompt, media, err := chatPrompt(c.Request.Context(), m, r.Tokenize, promptOpts, msgs, processedTools, req.Think, truncate)
 	if err != nil {
-		slog.Error("chat prompt error", "error", err)
+		roles := make([]string, len(msgs))
+		for i, msg := range msgs {
+			roles[i] = msg.Role
+		}
+		slog.Error("chat prompt error", "error", err, "msg_count", len(msgs), "roles", roles)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

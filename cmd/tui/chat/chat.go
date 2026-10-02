@@ -164,6 +164,7 @@ type chatModel struct {
 	autoSendDuration   time.Duration
 	lastInputAt        time.Time
 	autoSendDirty      bool
+	heartbeatMsg      string
 	err                error
 }
 
@@ -229,7 +230,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		workingDir:       opts.WorkingDir,
 		approvalState:    approvalState,
 		defaultAllowAll:  opts.AllowAllTools,
-		autoSendDuration: 120 * time.Second,
+		autoSendDuration: 600 * time.Second, // AUTOSEND-DEFAULT: 10 min, изменить здесь (поиск: AUTOSEND-DEFAULT)
 		promptHistory:    initialPromptHistory(ctx, opts),
 		status:           "ready",
 		openModelOnInit:  opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
@@ -315,6 +316,21 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner++
 		cmd := m.scheduleTick()
 		return m, cmd
+
+	case heartbeatTickMsg:
+		if !m.running && !m.compacting && m.heartbeatMsg != "" && m.autoSendDuration > 0 {
+			next := tea.Tick(m.autoSendDuration, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+			model, cmd := m.startRun(m.heartbeatMsg)
+			cmds := []tea.Cmd{next}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return model, tea.Batch(cmds...)
+		}
+		if m.heartbeatMsg != "" && m.autoSendDuration > 0 {
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+		}
+		return m, nil
 
 	case chatModelPreloadDoneMsg:
 		if msg.model != "" && msg.model != m.preloadingModel {

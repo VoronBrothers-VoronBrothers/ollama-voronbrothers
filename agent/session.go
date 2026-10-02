@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -442,6 +443,7 @@ func (s *Session) chatRound(ctx context.Context, runID string, opts RunOptions, 
 
 func buildChatRequest(opts RunOptions, messages []api.Message, tools api.Tools) api.ChatRequest {
 	requestMessages := sanitizeMessagesForRequest(messages)
+	requestMessages = ensureRealUserMessage(requestMessages)
 	if strings.TrimSpace(opts.SystemPrompt) != "" {
 		withSystem := make([]api.Message, 0, len(requestMessages)+1)
 		withSystem = append(withSystem, api.Message{Role: "system", Content: opts.SystemPrompt})
@@ -1035,4 +1037,32 @@ func ApproximateTokens(n int) int {
 
 func messageEmpty(msg api.Message) bool {
 	return msg.Content == "" && msg.Thinking == "" && len(msg.ToolCalls) == 0
+}
+
+// ensureRealUserMessage guards against the "ghost messages" condition where,
+// after compaction, every user-role message is a tool_response wrapper and no
+// real query remains. Without this guard some model renderers (e.g. Qwen35)
+// produce malformed prompts or refuse to generate.
+func ensureRealUserMessage(messages []api.Message) []api.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	for _, msg := range messages {
+		if msg.Role != "user" || messageEmpty(msg) {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if !(strings.HasPrefix(content, "<tool_response>") && strings.HasSuffix(content, "</tool_response>")) {
+			// Found at least one real user query — no guard needed.
+			return messages
+		}
+	}
+	// All user messages are tool_responses. Inject a placeholder so the model
+	// has an anchor to respond to.
+	slog.Warn("ghost-message guard: injecting placeholder user message (no real query after compaction)")
+	guard := api.Message{Role: "user", Content: "Continue working on your current task based on the conversation context above."}
+	withGuard := make([]api.Message, 0, len(messages)+1)
+	withGuard = append(withGuard, guard)
+	withGuard = append(withGuard, messages...)
+	return withGuard
 }

@@ -194,7 +194,7 @@ func (r *Qwen35Renderer) validateMessages(messages []api.Message) error {
 		}
 	}
 	if !foundUserQuery {
-		slog.Warn("all user messages are tool_responses, proceeding anyway")
+		return fmt.Errorf("all user messages are tool_responses: session guard should have prevented this; check compaction logic")
 	}
 
 	return nil

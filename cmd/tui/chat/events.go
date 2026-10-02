@@ -88,6 +88,8 @@ type chatEventsClosedMsg struct{}
 
 type chatTickMsg struct{}
 
+type heartbeatTickMsg struct{}
+
 func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 	contextChanged := false
 
