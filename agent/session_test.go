@@ -1245,6 +1245,9 @@ func TestSessionRequestSanitizesPreMarkedToolOutput(t *testing.T) {
 	if _, err := session.Run(context.Background(), RunOptions{
 		Model: "model",
 		Messages: []api.Message{{
+			Role:    "user",
+			Content: "run a command",
+		}, {
 			Role:       "tool",
 			Content:    content,
 			ToolName:   "bash",
@@ -1253,10 +1256,17 @@ func TestSessionRequestSanitizesPreMarkedToolOutput(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 1 || len(client.requests[0].Messages) != 1 {
+	if len(client.requests) != 1 || len(client.requests[0].Messages) < 2 {
 		t.Fatalf("requests = %#v", client.requests)
 	}
-	got := client.requests[0].Messages[0].Content
+	// Find the tool message (last one — guard may prepend a user placeholder)
+	got := ""
+	for _, msg := range client.requests[0].Messages {
+		if msg.Role == "tool" {
+			got = msg.Content
+			break
+		}
+	}
 	if got == content {
 		t.Fatal("request kept pre-marked oversized tool output unchanged")
 	}
