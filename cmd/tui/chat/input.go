@@ -232,11 +232,11 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 		if n == 0 {
-			m.autoSendDuration = 0
+			m.heartbeatInterval = 0
 			m.heartbeatMsg = ""
 			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Heartbeat выключен"}))
 		} else {
-			m.autoSendDuration = time.Duration(n) * time.Second
+			m.heartbeatInterval = time.Duration(n) * time.Second
 			if m.heartbeatMsg == "" {
 				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Интервал: %d с (текст не задан — используй /heartbeat \"текст\")", n)}))
 			} else {
@@ -251,7 +251,7 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		if msg == "" {
 			// No argument: show status or set default
 			if m.heartbeatMsg != "" {
-				dur := int(m.autoSendDuration.Seconds())
+				dur := int(m.heartbeatInterval.Seconds())
 				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat активен: %q каждые %d с", m.heartbeatMsg, dur)}))
 			} else {
 				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Использование: /heartbeat \"текст сообщения\""}))
@@ -259,16 +259,16 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 		// Set or update heartbeat message and start timer
-		if m.autoSendDuration == 0 {
-			m.autoSendDuration = 120 * time.Second
+		if m.heartbeatInterval == 0 {
+			m.heartbeatInterval = 120 * time.Second
 		}
 		prevMsg := m.heartbeatMsg
 		m.heartbeatMsg = msg
-		cmd := tea.Tick(m.autoSendDuration, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+		cmd := tea.Tick(m.heartbeatInterval, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
 		if prevMsg == "" {
-			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat запущен: %q каждые %d с", msg, int(m.autoSendDuration.Seconds()))}))
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat запущен: %q каждые %d с", msg, int(m.heartbeatInterval.Seconds()))}))
 		} else {
-			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat обновлён: %q каждые %d с", msg, int(m.autoSendDuration.Seconds()))}))
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat обновлён: %q каждые %d с", msg, int(m.heartbeatInterval.Seconds()))}))
 		}
 		return *m, cmd
 	case command == "/token":

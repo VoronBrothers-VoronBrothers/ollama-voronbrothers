@@ -165,6 +165,7 @@ type chatModel struct {
 	lastInputAt        time.Time
 	autoSendDirty      bool
 	heartbeatMsg      string
+	heartbeatInterval time.Duration
 	err                error
 }
 
@@ -318,8 +319,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case heartbeatTickMsg:
-		if !m.running && !m.compacting && m.heartbeatMsg != "" && m.autoSendDuration > 0 {
-			next := tea.Tick(m.autoSendDuration, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+		if !m.running && !m.compacting && m.heartbeatMsg != "" && m.heartbeatInterval > 0 {
+			next := tea.Tick(m.heartbeatInterval, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
 			model, cmd := m.startRun(m.heartbeatMsg)
 			cmds := []tea.Cmd{next}
 			if cmd != nil {
@@ -327,7 +328,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return model, tea.Batch(cmds...)
 		}
-		if m.heartbeatMsg != "" && m.autoSendDuration > 0 {
+		if m.heartbeatMsg != "" && m.heartbeatInterval > 0 {
 			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
 		}
 		return m, nil
