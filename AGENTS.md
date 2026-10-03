@@ -1,5 +1,9 @@
 # AGENTS.md
 
+> **Voron custom build: read `VORON-RUNBOOK.md` before any work in this repo.**
+> It covers: tool registration, build & deploy (ldflags, atomic swap), env flags,
+> and the exact cycle for adding new tools.
+
 ## Building
 
 For a full build from the repository root:

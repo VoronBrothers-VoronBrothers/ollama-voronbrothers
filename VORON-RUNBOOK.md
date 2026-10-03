@@ -36,7 +36,7 @@
 ## 3. Как пересобрать и поставить бинарник (проверенный цикл)
 
 > **Имя версии в ldflags:** `<upstream-версия>-voron-<DDMMYYYY>`.
-> Пример: `0.35.0-voron-01102026`.
+> Пример: `0.35.0-voron-03102026`.
 >
 > Правило определения:
 > 1. Выполнить `ollama --version` → получить номер из ответа (например `ollama version is 0.35.0`).
@@ -92,13 +92,6 @@ ollama list                                                          # серв�
 ```
 
 
-
-## 2026-08-25 — очередь + slash-команды (v0.33.0-rc3-voron)
-### Что сделано в коде (repo: /home/voron/Документы/VB-ollama/GitHub ollama/ollama 0.33.0-rc3):
-1. cmd/tui/chat/input.go: chatSlashCommands — добавлены алиасы /промт → /prompt, /новый → /new; новая команда /очисточередь. В submitInput case "/очисточередь": m.pendingPrompts = nil.
-2. cmd/tui/chat/chat.go: в обработчике resultMsg при msg.err != nil очередь НЕ зависает — сначала проверка pendingPrompts (отправка следующего), потом status "error".
-3. Очередь в целом: enqueue input.go handleSubmit (running/compacting → pendingPrompts), dequeue chat.go, display render.go.
-
 ### Пересборка:
 cd "/home/voron/Документы/VB-ollama/GitHub ollama/ollama 0.33.0-rc3"
 go build -ldflags "-X github.com/ollama/ollama/version.Version=0.33.0-rc3-voron" -o /tmp/ollama-patched .
@@ -107,11 +100,3 @@ sudo mv /tmp/ollama-patched /usr/local/bin/ollama   # mv, не cp!
 ### Примечания:
 - Shift+Delete в bubbletea v1.3.10 неотличим от Delete (нет парсинга CSI modifier) — поэтому очистка через /очисточередь.
 - Кириллицу в бинарнике проверять grep, не strings.
-
-## 2026-09-06 — время (ЧЧ:ММ:СС) над thinking и tool-вызовами
-`cmd/tui/chat/render.go`, версия бинарника 0.33.3-voron-ts:
-1. `syncThinkingEntry`: live-thinking entry при создании получает `startedAt: time.Now()`.
-2. В `renderEntryLines` кейсы "thinking", "tool", "tool_group" обёрнуты: первая строка вывода = `entryTimestampLine(entry)` (формат 15:04:05, стиль chatMetaStyle) — то же самое, что уже было у user/assistant. Метки только в рендере, в промт не попадают.
-3. Готовые сообщения из истории без startedAt метки НЕ получают (строка пустая) — поведение как раньше.
-
-Проверено: `go vet`, `go test ./cmd/tui/chat/` (фейлы TestApplyAgentEventGroupsCompletedCommandsAtNextToolBoundary / TestChatSkillSubmitWhileActiveRunKeepsActiveState / TestChatMessageSubmitWhileRunningPreservesDraft существуют и без патча). Временный тест подтвердил ts над thinking/tool/tool_group. Сборка и установка по §3 выше (`sudo mv`), бинарник подхватится при следующем запуске TUI/сервера.
