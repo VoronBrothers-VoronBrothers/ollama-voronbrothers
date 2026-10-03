@@ -292,6 +292,9 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	// код agent/tools/patch.go на месте — раскомментировать строку, чтобы вернуть.
 	// registry.Register(&agenttools.Patch{})
 	registry.Register(&agenttools.Write{})
+	if agentModelSupportsMultimodal(ctx, client, modelName) {
+		registry.Register(&agenttools.ViewImage{})
+	}
 	if len(skillCatalog.List()) > 0 {
 		registry.Register(&agenttools.Skill{Catalog: skillCatalog})
 	}

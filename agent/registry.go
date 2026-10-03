@@ -15,6 +15,8 @@ type ToolContext struct {
 type ToolResult struct {
 	Content    string
 	WorkingDir string
+	// Images are attached to the next user message so a multimodal model can see them.
+	Images []api.ImageData
 }
 
 type Tool interface {

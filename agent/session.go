@@ -610,6 +610,16 @@ func (s *Session) executeToolCalls(ctx context.Context, runID string, opts RunOp
 		batchTokens += estimateMessagesTokens([]api.Message{msg})
 		content := msg.Content
 
+		if len(result.Images) > 0 {
+			imgMsg := api.Message{
+				Role:    "user",
+				Content: fmt.Sprintf("[image attached]"),
+				Images:  result.Images,
+			}
+			batch.messages = append(batch.messages, imgMsg)
+			batchTokens += estimateMessagesTokens([]api.Message{imgMsg})
+		}
+
 		if toolOutputFullyOmitted(content) {
 			batch.overflows = append(batch.overflows, toolOutputOverflow{toolName: toolName, toolCallID: call.ID, content: rawContent})
 		}
