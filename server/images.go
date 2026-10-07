@@ -1303,7 +1303,12 @@ func requiresMLX(mf *manifest.Manifest) bool {
 	if mf.Runner != "" {
 		return strings.EqualFold(mf.Runner, manifest.RunnerMLX)
 	}
-	return hasTensorLayers(mf.Layers)
+	// No explicit runner: tensor layers only imply MLX on Apple Silicon.
+	// On other platforms safetensors are loaded via llama.cpp import.
+	if hasTensorLayers(mf.Layers) {
+		return runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
+	}
+	return false
 }
 
 // hasTensorLayers checks if any layer has tensor media type.
