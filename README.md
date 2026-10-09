@@ -11,6 +11,8 @@
 
 Форк Ollama с кастомными функциями для tmux-оркестрации. База — upstream `v0.40.2`.
 
+> **Сборка и установка.** Форк собирается из исходников, бинарники с ollama.com его не включают. Подробности — в [VORON-RUNBOOK.md](VORON-RUNBOOK.md): сборка через `go build -ldflags "-X .../version.Version=<upstream>-voron-<DDMMYYYY>"`, затем атомарная подмена бинарника (`sudo mv`, не `cp`) с бэкапом старого.
+
 ### Поведение по умолчанию
 
 - **Низкий effort размышлений** — если уровень thinking не задан явно, TUI использует `low` (экономит токены и время). Уровни: auto / on / off / low / medium / high / max (`/think`).
