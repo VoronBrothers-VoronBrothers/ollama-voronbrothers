@@ -23,7 +23,13 @@ const (
 const (
 	defaultCompactionContextWindowTokens = 32768
 	defaultCompactionKeepUserTurns       = 3
-	defaultCompactionThreshold           = 0.75
+	defaultCompactionThreshold           = 0.75 // < 32k context
+	highCtxCompactionThreshold          = 0.85 // 32k–90k context
+	maxCtxCompactionThreshold            = 0.90 // > 90k context
+
+	highCtxBoundaryTokens     = 32768  // above this, use highCtx threshold
+	maxCtxBoundaryTokens      = 90112  // above this, use max threshold
+
 	compactOnlySummaryContextTokens      = 16000
 
 	maxCompactionSummaryRunes = 16 * 1024
@@ -171,7 +177,7 @@ func (c *SimpleCompactor) MaybeCompact(ctx context.Context, req CompactionReques
 
 func (c *SimpleCompactor) shouldCompact(req CompactionRequest) bool {
 	contextWindow := c.contextWindowTokens(req.Options)
-	threshold := int(float64(contextWindow) * c.threshold())
+	threshold := int(float64(contextWindow) * c.effectiveThreshold(contextWindow))
 	if threshold <= 0 {
 		return false
 	}
@@ -194,17 +200,30 @@ func (c *SimpleCompactor) ContextWindowTokens(options map[string]any) int {
 	return c.contextWindowTokens(options)
 }
 
-func (c *SimpleCompactor) threshold() float64 {
-	return ResolveCompactionThreshold(c.Options.Threshold)
+// effectiveThreshold returns the compaction threshold, applying an adaptive
+// tier based on context window size when no explicit override is configured.
+func (c *SimpleCompactor) effectiveThreshold(contextWindow int) float64 {
+	if c.Options.Threshold > 0 {
+		return c.Options.Threshold // user override wins
+	}
+	switch {
+	case contextWindow > maxCtxBoundaryTokens:
+		return maxCtxCompactionThreshold
+	case contextWindow >= highCtxBoundaryTokens:
+		return highCtxCompactionThreshold
+	default:
+		return defaultCompactionThreshold
+	}
 }
 
-// Threshold returns the configured compaction threshold fraction. Satisfies
-// the Compactor interface.
+// Threshold returns the base compaction threshold fraction. Note: the actual
+// effective threshold may be higher for large context windows
+// (see effectiveThreshold). Satisfies the Compactor interface.
 func (c *SimpleCompactor) Threshold() float64 {
 	if c == nil {
 		return 0
 	}
-	return c.threshold()
+	return defaultCompactionThreshold
 }
 
 // ShouldCompact reports whether compaction is due and the trigger reason.
@@ -218,7 +237,7 @@ func (c *SimpleCompactor) ShouldCompact(req CompactionRequest) (string, bool) {
 	}
 	if c.shouldCompact(req) {
 		contextWindow := c.contextWindowTokens(req.Options)
-		threshold := int(float64(contextWindow) * c.threshold())
+		threshold := int(float64(contextWindow) * c.effectiveThreshold(contextWindow))
 		if req.Latest.PromptEvalCount > 0 && req.Latest.PromptEvalCount >= threshold {
 			return "prompt_eval", true
 		}
@@ -354,7 +373,7 @@ func CompactionSummaryMessages(summary string, continueTask bool) []api.Message 
 
 func (c *SimpleCompactor) compactionPromptBodyBudgetTokens(options map[string]any) int {
 	contextWindow := c.contextWindowTokens(options)
-	threshold := int(float64(contextWindow) * c.threshold())
+	threshold := int(float64(contextWindow) * c.effectiveThreshold(contextWindow))
 	if threshold <= 0 {
 		return 0
 	}
