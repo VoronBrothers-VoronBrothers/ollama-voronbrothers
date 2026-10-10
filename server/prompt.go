@@ -133,7 +133,10 @@ func imageTaggedMessages(m *Model, msgs []api.Message, start int, clearImages bo
 }
 
 func renderPrompt(m *Model, msgs []api.Message, tools []api.Tool, think *api.ThinkValue) (string, error) {
-	if m.Config.Renderer != "" {
+	// [voron] If the model has an explicit Go template that uses .Messages,
+	// prefer it over auto-assigned renderers. This allows fine-tuned models
+	// with custom chat templates (e.g. humanizer) to work correctly in chat mode.
+	if m.Config.Renderer != "" && !hasExplicitChatTemplate(m) {
 		rendererName := resolveRendererName(m)
 		rendered, err := renderers.RenderWithRenderer(rendererName, msgs, tools, think)
 		if err != nil {
@@ -153,4 +156,14 @@ func renderPrompt(m *Model, msgs []api.Message, tools []api.Tool, think *api.Thi
 		return "", err
 	}
 	return b.String(), nil
+}
+
+// hasExplicitChatTemplate returns true when the model's Go template was
+// explicitly authored to handle .Messages (chat mode), meaning it should
+// take priority over an auto-assigned architecture renderer.
+func hasExplicitChatTemplate(m *Model) bool {
+	if m == nil || !m.HasGoTemplate || m.Template == nil {
+		return false
+	}
+	return m.Template.Contains(".Messages")
 }
