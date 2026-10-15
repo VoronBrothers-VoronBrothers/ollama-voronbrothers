@@ -476,6 +476,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.result == nil {
 			m.finishLiveMessagesForStoppedRun(msg.newMessagesPersisted, msg.persistedMessages)
 		}
+		if (wasCanceling || isChatContextCanceledError(msg.err)) && msg.result == nil {
+			markInterruptedLastAssistant(m.messages)
+		}
 		if wasCanceling || isChatContextCanceledError(msg.err) {
 			// Esc-cancel: continue with the queued prompt if any, so
 			// stopping a run doesn't leave pending messages stuck in queue.
@@ -1374,6 +1377,22 @@ func messagesHavePendingToolCalls(messages []api.Message) bool {
 		}
 	}
 	return len(pending) > 0
+}
+
+const interruptedMarker = "\n[interrupted by user]"
+
+// markInterruptedLastAssistant appends a marker to the last assistant message
+// so that on subsequent runs the model knows the response was cut off by the
+// user pressing ESC, preventing context pollution (cascade degradation).
+func markInterruptedLastAssistant(messages []api.Message) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			if !strings.HasSuffix(messages[i].Content, interruptedMarker) {
+				messages[i].Content += interruptedMarker
+			}
+			return
+		}
+	}
 }
 
 func (m *chatModel) disarmQuit() {
