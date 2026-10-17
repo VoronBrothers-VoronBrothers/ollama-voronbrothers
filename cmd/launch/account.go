@@ -18,6 +18,9 @@ const (
 	accountCheckTimeout = 3 * time.Second
 )
 
+// DefaultUpgradeURL is the public upgrade page, used by TUI cloud auth.
+var DefaultUpgradeURL = modelUpgradeURL
+
 var errModelPaymentDeclined = errors.New("model payment declined")
 
 type accountStateStatus int
