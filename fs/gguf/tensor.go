@@ -158,8 +158,10 @@ const (
 )
 
 const (
-	// TensorTypePQ2_0 = product quantization 2-bit (ternary), block=64, typeSize=17
-	TensorTypePQ2_0 TensorType = 142
+	// TensorTypePQ2_0 = product quantization 2-bit (ternary), block=64, typeSize=17.
+	// TensorTypePTQ1_0 = the trits packing of the same Bonsai 2 files.
+	TensorTypePQ2_0  TensorType = 142
+	TensorTypePTQ1_0 TensorType = 143
 )
 
 func (tt TensorType) NumBytes() float64 {
@@ -240,8 +242,10 @@ func (tt TensorType) typeSize() int64 {
 		return 2 + tt.blockSize()/4
 	case TensorTypePQ2_0:
 		return 17 // pq2_0: fixed 17 bytes per block of 64
+	case TensorTypePTQ1_0: // f16 scale + five trits to the byte, group 128
+		return 2 + (ternaryGroup+4)/5
 	default:
-		return 0
+		return ternaryTypeSize(tt) // xollama port: unknown types stay unsized
 	}
 }
 
@@ -258,6 +262,8 @@ func (tt TensorType) blockSize() int64 {
 		return 1
 	case TensorTypeNVFP4, TensorTypeQ2_0, TensorTypePQ2_0:
 		return 64
+	case TensorTypePTQ1_0:
+		return ternaryGroup
 	case TensorTypeQ1_0:
 		return 128
 	case TensorTypeQ4_0,
@@ -364,8 +370,10 @@ func (tt TensorType) String() string {
 		return "q2_0"
 	case TensorTypePQ2_0:
 		return "pq2_0"
+	case TensorTypePTQ1_0:
+		return "ptq1_0"
 	default:
-		return "unknown"
+		return ternaryTensorName(tt) // xollama port
 	}
 }
 
