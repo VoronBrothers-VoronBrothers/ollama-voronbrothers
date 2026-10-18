@@ -1,5 +1,5 @@
 # Инструменты агента (bash/read/edit/skill) — где живут, как править и добавлять
-
+# инструкция 
 
 > Репозиторий: `/home/voron/Документы/VB-ollama/ollama` (upstream github.com/ollama/ollama, ветка на fb307609 + свои правки).
 

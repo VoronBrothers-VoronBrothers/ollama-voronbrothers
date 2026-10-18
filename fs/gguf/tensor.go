@@ -1,5 +1,7 @@
 package gguf
 
+import "fmt"
+
 import (
 	"log/slog"
 	"strings"
@@ -57,6 +59,7 @@ func (ti TensorInfo) numBytes() (int64, bool) {
 	typeSize := ti.Type.typeSize()
 	blockSize := ti.Type.blockSize()
 	if typeSize == 0 || blockSize == 0 {
+		fmt.Printf("DEBUG: tensor %q has unknown type code %d (typeSize=%d, blockSize=%d), shape=%v\n", ti.Name, uint32(ti.Type), typeSize, blockSize, ti.Shape)
 		return 0, false
 	}
 
@@ -154,6 +157,11 @@ const (
 	TensorTypeQ2_0
 )
 
+const (
+	// TensorTypePQ2_0 = product quantization 2-bit (ternary), block=64, typeSize=17
+	TensorTypePQ2_0 TensorType = 142
+)
+
 func (tt TensorType) NumBytes() float64 {
 	return float64(tt.typeSize()) / float64(tt.blockSize())
 }
@@ -230,6 +238,8 @@ func (tt TensorType) typeSize() int64 {
 		return 2 + tt.blockSize()/8
 	case TensorTypeQ2_0:
 		return 2 + tt.blockSize()/4
+	case TensorTypePQ2_0:
+		return 17 // pq2_0: fixed 17 bytes per block of 64
 	default:
 		return 0
 	}
@@ -246,7 +256,7 @@ func (tt TensorType) blockSize() int64 {
 		TensorTypeF64,
 		TensorTypeBF16:
 		return 1
-	case TensorTypeNVFP4, TensorTypeQ2_0:
+	case TensorTypeNVFP4, TensorTypeQ2_0, TensorTypePQ2_0:
 		return 64
 	case TensorTypeQ1_0:
 		return 128
@@ -352,6 +362,8 @@ func (tt TensorType) String() string {
 		return "q1_0"
 	case TensorTypeQ2_0:
 		return "q2_0"
+	case TensorTypePQ2_0:
+		return "pq2_0"
 	default:
 		return "unknown"
 	}
