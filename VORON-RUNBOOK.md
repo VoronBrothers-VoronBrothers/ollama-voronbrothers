@@ -100,6 +100,15 @@ cd "/home/voron/Документы/VB-ollama/GitHub ollama/ollama 0.33.0-rc3"
 go build -ldflags "-X github.com/ollama/ollama/version.Version=0.33.0-rc3-voron" -o /tmp/ollama-patched .
 sudo mv /tmp/ollama-patched /usr/local/bin/ollama   # mv, не cp!
 
+### Оллала TUI и /usr/local/lib/ollama (llama.cpp):
+- ollama tui пользуется только `/usr/local/lib/ollama/` из llama cpp — это готовые
+  шары C++-движка (`libggml-base.so`, `libggml-cpu-*.so`, `cuda_v12/`, `ggml-rpc-server`).
+  Собирать их из источников этого репозитория (FetchContent/CMake) НЕ нужно.
+- Можно тупо скопировать для себя готовые релизы и перенести их в `/usr/local/lib/ollama/`:
+  https://github.com/ggml-org/llama.cpp/releases
+  (архив с нужной версией, из него — `libggml-*.so`, cuda-библиотеки, `ggml-rpc-server`).
+- После копирования бинарник ollama подхватит новые .so при следующем старте процесса.
+
 ### Примечания:
 - Shift+Delete в bubbletea v1.3.10 неотличим от Delete (нет парсинга CSI modifier) — поэтому очистка через /очисточередь.
 - Кириллицу в бинарнике проверять grep, не strings.
