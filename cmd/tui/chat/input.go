@@ -67,6 +67,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
 	{name: "/heartbeat", usage: "/heartbeat \"текст\"", description: "periodically send a message to AI", aliases: []string{"/авторитм"}},
 	{name: "/heartbeat-time", usage: "/heartbeat-time <секунды>", description: "set heartbeat interval (0=off)", aliases: []string{"/авторитм-тайм"}},
+	{name: "/zip", usage: "/zip [on|off]", description: "toggle automatic context compaction (default on)", aliases: []string{"/зип"}},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
@@ -274,6 +275,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat обновлён: %q каждые %d с", msg, int(m.heartbeatInterval.Seconds()))}))
 		}
 		return *m, cmd
+	case command == "/zip":
+		return m.handleZipCommand(args)
 	case command == "/token":
 		return m.handleTokenToggleCommand(args)
 	case command == "/fullthink":

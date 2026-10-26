@@ -50,6 +50,10 @@ type RunOptions struct {
 	// use the default guard and cloud models are unlimited. A negative value
 	// disables the guard for tests or special callers.
 	MaxToolRounds int
+	// DisableAutoCompaction turns off automatic compaction for this run while
+	// keeping the compactor available for manual compaction and for the
+	// context-window based tool output budgets.
+	DisableAutoCompaction bool
 }
 
 type RunResult struct {
@@ -726,7 +730,7 @@ func isContextCanceledError(ctx context.Context, err error) bool {
 }
 
 func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse, keepLastCount int, skipNotified bool) ([]api.Message, bool, error) {
-	if s.Compactor == nil {
+	if s.Compactor == nil || opts.DisableAutoCompaction {
 		return messages, skipNotified, nil
 	}
 	req := s.compactionRequest(runID, opts, messages, latest)
@@ -765,8 +769,6 @@ func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOption
 	}
 	return result.Messages, skipNotified, nil
 }
-
-
 
 func (s *Session) compactionRequest(runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse) CompactionRequest {
 	meta := newEventMetadata(runID, opts)

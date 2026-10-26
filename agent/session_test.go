@@ -1337,6 +1337,52 @@ func TestSessionCompactsAfterToolResultsBeforeContinuing(t *testing.T) {
 	}
 }
 
+func TestSessionDisableAutoCompactionSkipsCompactor(t *testing.T) {
+	args := api.NewToolCallFunctionArguments()
+	args.Set("value", "hello")
+	client := &fakeClient{
+		responses: [][]api.ChatResponse{
+			{{
+				Message: api.Message{Role: "assistant", ToolCalls: []api.ToolCall{{
+					ID: "call-1",
+					Function: api.ToolCallFunction{
+						Name:      "echo_tool",
+						Arguments: args,
+					},
+				}}},
+			}},
+			{{Message: api.Message{Role: "assistant", Content: "done without compact"}}},
+		},
+	}
+	registry := &Registry{}
+	registry.Register(staticTool{})
+	compactor := &recordingCompactor{}
+	session := &Session{
+		Client:        client,
+		Tools:         registry,
+		ApprovalState: approvalStateForTest(true, nil),
+		Compactor:     compactor,
+	}
+
+	result, err := session.Run(context.Background(), RunOptions{
+		Model:                 "model",
+		NewMessages:           []api.Message{{Role: "user", Content: "use a tool"}},
+		DisableAutoCompaction: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compactor.requests) != 0 {
+		t.Fatalf("compactor was called %d times with auto-compaction disabled", len(compactor.requests))
+	}
+	if client.calls != 2 {
+		t.Fatalf("client calls = %d, want the run to continue after tool results", client.calls)
+	}
+	if got := result.Messages[len(result.Messages)-1].Content; got != "done without compact" {
+		t.Fatalf("final response = %q", got)
+	}
+}
+
 func TestSessionStopsWhenCompactedHistoryStillExceedsContext(t *testing.T) {
 	args := api.NewToolCallFunctionArguments()
 	args.Set("value", "hello")

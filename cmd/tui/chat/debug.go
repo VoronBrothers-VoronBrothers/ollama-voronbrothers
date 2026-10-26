@@ -61,6 +61,25 @@ func (m *chatModel) handleTokenToggleCommand(args string) (tea.Model, tea.Cmd) {
 	return *m, nil
 }
 
+func (m *chatModel) handleZipCommand(args string) (tea.Model, tea.Cmd) {
+	switch strings.TrimSpace(strings.ToLower(args)) {
+	case "", "toggle":
+		m.compactionDisabled = !m.compactionDisabled
+	case "on", "вкл", "включить":
+		m.compactionDisabled = false
+	case "off", "выкл", "выключить":
+		m.compactionDisabled = true
+	default:
+		return m.addDebugError(fmt.Errorf("usage: /zip [on|off]"))
+	}
+	if m.compactionDisabled {
+		m.entries = append(m.entries, newSlashEntry("автосжатие контекста выключено — сжимать вручную: /compact"))
+	} else {
+		m.entries = append(m.entries, newSlashEntry("автосжатие контекста включено"))
+	}
+	return *m, nil
+}
+
 func (m *chatModel) handlePromptCommand(args string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(args) != "" {
 		return m.addDebugError(fmt.Errorf("usage: /prompt"))
@@ -189,13 +208,14 @@ func (m chatModel) requestPreview() (api.ChatRequest, int) {
 
 func (m chatModel) previewRunOptions() coreagent.RunOptions {
 	return coreagent.RunOptions{
-		ChatID:       m.chatID,
-		Model:        m.opts.Model,
-		SystemPrompt: m.systemPrompt(""),
-		Format:       m.opts.Format,
-		Options:      m.opts.Options,
-		Think:        m.opts.Think,
-		KeepAlive:    m.opts.KeepAlive,
+		ChatID:                m.chatID,
+		Model:                 m.opts.Model,
+		SystemPrompt:          m.systemPrompt(""),
+		Format:                m.opts.Format,
+		Options:               m.opts.Options,
+		Think:                 m.opts.Think,
+		KeepAlive:             m.opts.KeepAlive,
+		DisableAutoCompaction: m.compactionDisabled,
 	}
 }
 

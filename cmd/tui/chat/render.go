@@ -21,19 +21,19 @@ import (
 )
 
 type chatEntry struct {
-	role         string
-	content      string
-	label        string
-	detail       string
-	status       string
-	err          string
-	toolID       string
-	args         map[string]any
-	expanded     bool
-	startedAt    time.Time
-	finishedAt   time.Time
-	tools        []chatEntry
-	metrics      *api.Metrics
+	role              string
+	content           string
+	label             string
+	detail            string
+	status            string
+	err               string
+	toolID            string
+	args              map[string]any
+	expanded          bool
+	startedAt         time.Time
+	finishedAt        time.Time
+	tools             []chatEntry
+	metrics           *api.Metrics
 	tokenCount        int
 	outputTokens      int
 	tokensNote        string
@@ -966,7 +966,6 @@ func (m *chatModel) finishThinkingEntry() {
 	m.entries[idx].expanded = m.thinkingDetailsOpen
 	m.markEntryDirty(idx)
 }
-
 
 func toolGroupChildStatusLine(entry chatEntry) string {
 	label := toolGroupChildStatusLabel(entry)

@@ -131,6 +131,7 @@ type chatModel struct {
 	contextTokens       int
 	contextEstimate     bool
 	tokensMode          bool
+	compactionDisabled  bool
 	modelPicker         *chatModelPicker
 	modelPickerModels   []ModelOption
 	thinkPicker         *chatThinkPicker
@@ -164,8 +165,8 @@ type chatModel struct {
 	autoSendDuration   time.Duration
 	lastInputAt        time.Time
 	autoSendDirty      bool
-	heartbeatMsg      string
-	heartbeatInterval time.Duration
+	heartbeatMsg       string
+	heartbeatInterval  time.Duration
 	err                error
 }
 
@@ -224,18 +225,19 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	approvalState.Set(opts.AllowAllTools, nil)
 
 	m := chatModel{
-		ctx:              ctx,
-		opts:             opts,
-		chatID:           opts.ChatID,
-		messages:         slices.Clone(opts.Messages),
-		workingDir:       opts.WorkingDir,
-		approvalState:    approvalState,
-		defaultAllowAll:  opts.AllowAllTools,
-		autoSendDuration: 600 * time.Second, // AUTOSEND-DEFAULT: 10 min, изменить здесь (поиск: AUTOSEND-DEFAULT)
-		promptHistory:    initialPromptHistory(ctx, opts),
-		status:           "ready",
-		openModelOnInit:  opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
-		tokensMode:       true,
+		ctx:                ctx,
+		opts:               opts,
+		chatID:             opts.ChatID,
+		messages:           slices.Clone(opts.Messages),
+		workingDir:         opts.WorkingDir,
+		approvalState:      approvalState,
+		defaultAllowAll:    opts.AllowAllTools,
+		autoSendDuration:   600 * time.Second, // AUTOSEND-DEFAULT: 10 min, изменить здесь (поиск: AUTOSEND-DEFAULT)
+		promptHistory:      initialPromptHistory(ctx, opts),
+		status:             "ready",
+		openModelOnInit:    opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
+		tokensMode:         true,
+		compactionDisabled: false,
 	}
 	m.nextImageID, m.nextAudioID = nextInputAttachmentIDsFromMessages(m.messages)
 	m.nextPastedTextID = nextInputPastedTextIDFromMessages(m.messages)
@@ -1318,16 +1320,17 @@ func (m *chatModel) startRunWithMessages(displayInput, historyInput string, newM
 		Compactor:        m.opts.Compactor,
 	}
 	opts := coreagent.RunOptions{
-		ChatID:       m.chatID,
-		Model:        m.opts.Model,
-		SystemPrompt: systemPrompt,
-		Messages:     slices.Clone(m.messages),
-		NewMessages:  slices.Clone(newMessages),
-		Format:       m.opts.Format,
-		Options:      m.opts.Options,
-		Think:        m.opts.Think,
-		KeepAlive:    m.opts.KeepAlive,
-		SkillName:    skillName,
+		ChatID:                m.chatID,
+		Model:                 m.opts.Model,
+		SystemPrompt:          systemPrompt,
+		Messages:              slices.Clone(m.messages),
+		NewMessages:           slices.Clone(newMessages),
+		Format:                m.opts.Format,
+		Options:               m.opts.Options,
+		Think:                 m.opts.Think,
+		KeepAlive:             m.opts.KeepAlive,
+		SkillName:             skillName,
+		DisableAutoCompaction: m.compactionDisabled,
 	}
 
 	persistedMessages := make([]api.Message, 0, len(m.messages)+len(newMessages))

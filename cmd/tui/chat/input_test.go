@@ -678,7 +678,7 @@ func writeChatTestSkill(t *testing.T, dir, name string) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := "---\nname: " + name + "\ndescription: Test skill.\n---\nBody." 
+	content := "---\nname: " + name + "\ndescription: Test skill.\n---\nBody."
 	if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -699,10 +699,10 @@ func TestSkillsRemoveHotReloadKeepsContext(t *testing.T) {
 		ctx:        context.Background(),
 		workingDir: workingDir,
 		opts: Options{
-			Model:     "test",
-			Client:    chatTestClient{},
+			Model:      "test",
+			Client:     chatTestClient{},
 			WorkingDir: workingDir,
-			Skills:    before,
+			Skills:     before,
 			ReloadSkills: func() (*coreagent.SkillCatalog, error) {
 				reloaded = true
 				return coreagent.LoadDefaultSkills(workingDir)
@@ -1310,6 +1310,55 @@ func TestChatSystemCommandArgumentCompletions(t *testing.T) {
 	completions := m.slashCompletions()
 	if len(completions) != 1 || completions[0].label != "No matching options" {
 		t.Fatalf("invalid argument completions = %#v", completions)
+	}
+}
+
+func TestChatZipCommandTogglesAutoCompaction(t *testing.T) {
+	m := chatModel{input: []rune("/zip")}
+
+	updated, cmd := m.handleSubmit()
+	if cmd != nil {
+		t.Fatal("/zip should not start a run")
+	}
+	m = updated.(chatModel)
+	if !m.compactionDisabled {
+		t.Fatal("/zip first toggle should disable auto-compaction")
+	}
+	if got := m.entries[len(m.entries)-1].content; got != "автосжатие контекста выключено — сжимать вручную: /compact" {
+		t.Fatalf("/zip entry = %q", got)
+	}
+	if !m.previewRunOptions().DisableAutoCompaction {
+		t.Fatal("preview run options should carry the compaction toggle")
+	}
+
+	m.input = []rune("/zip")
+	updated, _ = m.handleSubmit()
+	m = updated.(chatModel)
+	if m.compactionDisabled {
+		t.Fatal("/zip second toggle should turn auto-compaction back on")
+	}
+	if got := m.entries[len(m.entries)-1].content; got != "автосжатие контекста включено" {
+		t.Fatalf("/zip entry = %q", got)
+	}
+	m.input = []rune("/зип off")
+	updated, _ = m.handleSubmit()
+	m = updated.(chatModel)
+	if !m.compactionDisabled {
+		t.Fatal("/зип off should disable auto-compaction")
+	}
+
+	m.input = []rune("/зип on")
+	updated, _ = m.handleSubmit()
+	m = updated.(chatModel)
+	if m.compactionDisabled {
+		t.Fatal("/зип on should enable auto-compaction")
+	}
+
+	m.input = []rune("/zip sometimes")
+	updated, _ = m.handleSubmit()
+	m = updated.(chatModel)
+	if m.status != "error" || len(m.entries) == 0 || m.entries[len(m.entries)-1].content != "usage: /zip [on|off]" {
+		t.Fatalf("invalid /zip result = status:%q entries:%#v", m.status, m.entries)
 	}
 }
 
