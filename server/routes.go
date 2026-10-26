@@ -2326,6 +2326,8 @@ func allowedHostsMiddleware(addr net.Addr) gin.HandlerFunc {
 }
 
 func (s *Server) GenerateRoutes() (http.Handler, error) {
+	loadProviders()
+
 	codexDesktopProxy, err := newCodexDesktopProxy()
 	if err != nil {
 		return nil, err
@@ -2403,7 +2405,7 @@ func (s *Server) GenerateRoutes() (http.Handler, error) {
 	// Inference
 	r.GET("/api/ps", s.PsHandler)
 	r.POST("/api/generate", s.withInferenceRequestLogging("/api/generate", s.GenerateHandler)...)
-	r.POST("/api/chat", s.withInferenceRequestLogging("/api/chat", s.ChatHandler)...)
+	r.POST("/api/chat", s.withInferenceRequestLogging("/api/chat", externalProxyMiddleware(), s.ChatHandler)...)
 	r.POST("/api/embed", s.EmbedHandler)
 	r.POST("/api/embeddings", s.EmbeddingsHandler)
 	r.POST("/v1/systemone", cloudPassthroughMiddleware(cloudErrRemoteInferenceUnavailable), s.SystemOneHandler)
