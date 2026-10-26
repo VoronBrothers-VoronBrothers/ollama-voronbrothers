@@ -353,6 +353,12 @@ func buildOpenAIRequest(extRef *externalModelRef, ollamaBody []byte) ([]byte, er
 		openaiReq.Messages = append(openaiReq.Messages, out)
 	}
 
+	// [voron] universal external-model system prompt: applied here so raw API
+	// clients get it too. Clients that already sent it (the TUIs read it from
+	// ShowResponse.System) are detected by prependExternalSystemPrompt and the
+	// prompt is not duplicated.
+	openaiReq.Messages = prependExternalSystemPrompt(openaiReq.Messages, externalSystemPrompt())
+
 	// Pass through some options if present
 	if req.Options != nil {
 		if maxTokens, ok := req.Options["num_predict"].(float64); ok && maxTokens > 0 {

@@ -1772,6 +1772,10 @@ func (s *Server) ShowHandler(c *gin.Context) {
 			RemoteHost:   ext.Provider.BaseURL,
 			Capabilities: []model.Capability{model.CapabilityTools}, // [voron] function calling через прокси
 			Details:      api.ModelDetails{Family: "external", ParameterSize: "external"},
+			// [voron] universal prompt for external models: the TUIs build
+			// their system message from this field. It is NOT the model's own
+			// template system prompt (external models have none).
+			System: externalSystemPrompt(),
 		})
 		return
 	}
