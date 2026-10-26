@@ -118,6 +118,8 @@ sudo mv /tmp/ollama-patched /usr/local/bin/ollama   # mv, не cp!
   путь из `/home/voron` требует ACL (drop-in уже стоит):
   `/etc/systemd/system/ollama.service.d/providers.conf` →
   `Environment="OLLAMA_PROVIDERS_CONFIG=/home/voron/.ollama/providers.json"`
+- Формат записи провайдера: `name`, `base_url`, `api_key`, `models`, опционально
+  `context_window` / `context_windows` (см. ниже).
 ```bash
 sudo setfacl -m u:ollama:x /home/voron          # проход в каталог
 sudo setfacl -m u:ollama:rx /home/voron/.ollama  # листинг + чтение
@@ -140,6 +142,23 @@ sudo journalctl -u ollama -n 50 | grep -i providers
 - Правки подхватываются без рестарта (кэш по mtime + размеру).
 - Проверка: `ollama show proxyapi/qwen/qwen3.8-27b` → блок `System`.
 - `/system off` в TUI отключает промпт и для внешних моделей.
+
+### Окно контекста внешних моделей (`context_window`):
+- Внешний API не отдаёт размер окна, поэтому TUI падал на фолбэк 32768 и сжимал
+  сессию слишком рано. В `providers.json` добавлены необязательные поля
+  (`server/providers.go`):
+  - `context_window` — одно значение на провайдера;
+  - `context_windows` — `{"vendor/model": N}` per-model (важнее общего).
+- Значение отдаётся в `/api/show` внешней модели (`Details.context_length`);
+  отрицательные и нулевые значения отбрасываются на загрузке конфига.
+- Проверка: `ollama show proxyapi/qwen/qwen3.8-27b | grep -i context`
+  и запись в журнале `providers: loaded external provider ... context_window=...`.
+
+### Автосжатие контекста (`/zip`):
+- `/zip` (алиас `/зип`) переключает автосжатие в текущей сессии TUI;
+  `/zip on|off` (`вкл|выкл`) — задать явно. По умолчанию включено.
+- Выключено → остаётся только ручной `/compact` (`agent.RunOptions.DisableAutoCompaction`).
+- Флаг сессионный, в файлы не пишется; после перезапуска TUI снова включён.
 
 ### Примечания:
 - Shift+Delete в bubbletea v1.3.10 неотличим от Delete (нет парсинга CSI modifier) — поэтому очистка через /очисточередь.
