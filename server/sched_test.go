@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,9 @@ import (
 
 func TestMain(m *testing.M) {
 	os.Setenv("OLLAMA_DEBUG", "1")
+	// [voron] keep tests hermetic: an explicit (nonexistent) providers config
+	// prevents loadProviders from picking up a real ~/.ollama/providers.json.
+	os.Setenv(providersEnvName, filepath.Join(os.TempDir(), "ollama-test-no-providers.json"))
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 	restoreMigrators := compatmigrate.SetMigratorsForTesting(nil)

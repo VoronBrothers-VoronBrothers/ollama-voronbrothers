@@ -52,7 +52,12 @@ func providerConfigPaths() []string {
 		paths = append(paths, clean)
 	}
 
-	add(strings.TrimSpace(os.Getenv(providersEnvName)))
+	// [voron] an explicit OLLAMA_PROVIDERS_CONFIG is authoritative: it is the
+	// only path consulted, so a missing/typo'd path never silently falls back
+	// to another user's home config. Tests use this to stay hermetic.
+	if explicit := strings.TrimSpace(os.Getenv(providersEnvName)); explicit != "" {
+		return []string{filepath.Clean(explicit)}
+	}
 
 	configDir := strings.TrimSpace(os.Getenv("OLLAMA_HOME"))
 	if configDir == "" {
