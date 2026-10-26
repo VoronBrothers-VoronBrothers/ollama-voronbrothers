@@ -282,8 +282,8 @@ func safetensorsCreateOptions(modelfile *parser.Modelfile, filename, modelName s
 }
 
 var (
-	errForceLocalOnly      = errors.New("--force is only supported for local MLX safetensors imports")
-	errTypicalPDeprecated  = errors.New("typical_p is deprecated and cannot be set as a model parameter; pass it as a request option instead")
+	errForceLocalOnly     = errors.New("--force is only supported for local MLX safetensors imports")
+	errTypicalPDeprecated = errors.New("typical_p is deprecated and cannot be set as a model parameter; pass it as a request option instead")
 )
 
 // createSafetensorsModel imports in-process when the server is local and
@@ -1195,6 +1195,16 @@ func PushHandler(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// shortDigest renders the short form of a manifest digest for table output.
+// Models proxied to external API providers have no local manifest, so their
+// digest is empty and must not be sliced.
+func shortDigest(digest string) string {
+	if len(digest) <= 12 {
+		return digest
+	}
+	return digest[:12]
+}
+
 func ListHandler(cmd *cobra.Command, args []string) error {
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
@@ -1210,14 +1220,18 @@ func ListHandler(cmd *cobra.Command, args []string) error {
 
 	for _, m := range models.Models {
 		if len(args) == 0 || strings.HasPrefix(strings.ToLower(m.Name), strings.ToLower(args[0])) {
-			var size string
-			if m.RemoteModel != "" {
-				size = "-"
-			} else {
+			// [voron] external API provider models are listed by /api/tags
+			// without a manifest digest or size; show placeholders instead of
+			// slicing an empty digest (which used to panic).
+			size, modified := "-", format.HumanTime(m.ModifiedAt, "Never")
+			if m.RemoteModel == "" && m.Digest != "" {
 				size = format.HumanBytes(m.Size)
 			}
+			if m.Digest == "" {
+				modified = "-"
+			}
 
-			data = append(data, []string{m.Name, m.Digest[:12], size, format.HumanTime(m.ModifiedAt, "Never")})
+			data = append(data, []string{m.Name, shortDigest(m.Digest), size, modified})
 		}
 	}
 
@@ -1272,7 +1286,7 @@ func ListRunningHandler(cmd *cobra.Command, args []string) error {
 				until = format.HumanTime(m.ExpiresAt, "Never")
 			}
 			ctxStr := strconv.Itoa(m.ContextLength)
-			data = append(data, []string{m.Name, m.Digest[:12], format.HumanBytes(m.Size), procStr, ctxStr, m.Runner, until})
+			data = append(data, []string{m.Name, shortDigest(m.Digest), format.HumanBytes(m.Size), procStr, ctxStr, m.Runner, until})
 		}
 	}
 

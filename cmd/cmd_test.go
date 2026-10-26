@@ -1592,6 +1592,17 @@ func TestListHandler(t *testing.T) {
 				"model1    abc123abc123    1.0 KB    24 hours ago    \n",
 		},
 		{
+			name: "external provider model without digest",
+			args: []string{},
+			serverResponse: []api.ListModelResponse{
+				{Name: "model1", Digest: "abc123abc123abc123", Size: 1024, ModifiedAt: time.Now().Add(-24 * time.Hour)},
+				{Name: "proxyapi/vendor/model", Model: "proxyapi/vendor/model"},
+			},
+			expectedOutput: "NAME                     ID              SIZE      MODIFIED     \n" +
+				"model1                   abc123abc123    1.0 KB    24 hours ago    \n" +
+				"proxyapi/vendor/model                    -         -               \n",
+		},
+		{
 			name:          "server error",
 			args:          []string{},
 			expectedError: "server error",
