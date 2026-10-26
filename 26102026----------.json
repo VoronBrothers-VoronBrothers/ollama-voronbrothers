@@ -1,0 +1,915 @@
+{
+  "model": "proxyapi/deepseek/deepseek-v4.1-flash-1017",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Current date: Monday, October 26, 2026.\nCurrent working directory: \"/home/voron\".\n\n\u003cavailable_skills\u003e\n- accessibility-tree: Получить дерево доступности GUI (AT-SPI) с точными координатами элементов для кликов и ввода. Использовать когда нужно взаимодействовать с интерфейсом (нажать кнопку, вставить каретку, ввести текст), а не просто посмотреть на экран.\n- blender-mcp: Работа в программе blender\n- mcp-supergateway: Энтрипоинт для поднятия MCP-серверов по HTTP через supergateway. Даёт возможности, которых нет в bash: управление браузером, работа с файлами, видео.\n- mouse-click: Для кликов мышью. Все клики выполнять только этим скриптом.\n- mouse-move: Точное наведение мыши по координатам. Плашка + программная проверка. Без клика (клик = скилл mouse-click).\n- skill-creator: Create or improve reusable skills. Use when the user wants a reusable skill, asks how to author SKILL.md, or needs help installing a skill.\n- webq: Use before task. Terminal web search + page fetch (DDG/Bing via curl), no API keys. Default for internet search.\n\u003c/available_skills\u003e\nLoad a matching skill with the skill tool before following its instructions. Skills only provide instructions; use ordinary tools for filesystem or network access, with their normal approval rules."
+    },
+    {
+      "role": "user",
+      "content": "Conversation summary:\n## Task\nMake the Ollama fork read external providers from `~/.ollama/providers.json` and apply a universal system prompt **only to external API models**, stored under `/home/voron/.ollama/`; rebuild/install and document.\n\n## Stage\nCode investigation of the TUI `/system` toggle is done; nothing new committed yet — docs, commit and cleanup remain.\n\n## Tried\n- Confirmed providers path, ACLs, rebuilt/installed fork binary.\n- Verified home config independent; `/etc` copy moved to `.bak`.\n- Fixed strict tool-call decode with lenient `api/toolcall_args.go` + tests.\n- Wired lenient decode into OpenAI tools/responses/compact and `llama_server`.\n- Anthropic `ContentBlock.Input` leniency explicitly abandoned.\n- Fixed `ollama list` panic: `slice bounds out of range [:12]`.\n- Added `shortDigest()`, empty-digest guards, `-` placeholders; cmd tests pass.\n- Made `providerConfigPaths()` honor explicit `OLLAMA_PROVIDERS_CONFIG` only.\n- Wrote `server/external_prompt.go` with env, file aliases, mtime+size cache.\n- Prompt injected at `buildOpenAIRequest` and `ShowHandler.System`.\n- Created `/home/voron/.ollama/external_system_prompt.md` (11 lines, 1227 B).\n- Rebuilt with ldflags into `/tmp/ollama-build`; installed; restarted daemon.\n- `/api/version` → `0.40.6-voron-26102026`; `ollama show` prints `System`.\n- Built local mock provider; verified prompt appears exactly once.\n- Mock rejected initial 2-segment model name; fixed to `echotest/vendor/mock-model`.\n- Mock returned empty body without streaming; added SSE handler, tests passed.\n- Dedupe verified: prompt pre-sent → still 1 occurrence; custom system → merged, 1 occurrence.\n- `pkill -f \"ollama serve\"` aborted shell (exit -1); had to kill by PID.\n- Toggle traced: `systemPromptDisabled` (`cmd/tui/chat/chat.go:149`), set in `handleSystemCommand` (`input.go:517–539`).\n- `chatModel.systemPrompt()` (`input.go:1828`) drops prompt when disabled; called from `chat.go:1294`, `render.go:1821`, `compaction.go:45`, `debug.go:194`.\n- `SystemPromptForModel` wired at `cmd/agent_tui.go:158` via `agentSystemFromShow` → reads `ShowResponse.System`, so `/system off` also hides the external prompt in TUI runs.\n- Raw `/api/chat` path rebuilds messages in `agent/session.go:458 buildChatRequest`; disabled TUI sends only the user message.\n- Existing test `TestChatSystemCommandControlsBuiltInSystemPrompt` (`input_test.go:1132`) covers `/system off` but with a plain prompt, not the external one.\n- Repeated reads of `/tmp/prompttest/providers.json` (cat/read/head/wc) returned truncated output — not resolved.\n\n## Files \u0026 Commands\n- **New:** `server/external_prompt.go`, `server/external_prompt_test.go`, `api/toolcall_args.go`, `api/toolcall_args_test.go`\n- **Modified (uncommitted):** `server/external_proxy.go`, `server/routes.go`\n- **Inspected only:** `cmd/tui/chat/input.go`, `cmd/tui/chat/chat.go`, `cmd/agent_tui.go`, `agent/session.go`, `cmd/tui/chat/input_test.go`, `PLAN-external-api.md`\n- **Prompt:** `/home/voron/.ollama/external_system_prompt.md` (`-rw-r--r-- voron voron`)\n- **Config:** `/home/voron/.ollama/providers.json`; systemd drop-ins in `/etc/systemd/system/ollama.service.d/*.conf`\n- **ACLs:** `/home/voron` → `user:ollama:--x`; `/home/voron/.ollama` → `user:ollama:r-x`\n- **Repo:** `/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork`; HEAD `050986b5`\n- **Backups:** `/usr/local/bin/ollama-0.40.6-voron-26102026-pre-prompt.bak`, `…-final.bak`\n- **Test rig:** `/tmp/prompttest/echo.py`, `/tmp/prompttest/providers.json`, logs `serve.log`/`echo.log`\n- `go build -ldflags \"-s -w -X github.com/ollama/ollama/version.Version=0.40.6-voron-26102026\" -o /tmp/ollama-build .`\n- `sudo install -m 755 /tmp/ollama-build /usr/local/bin/ollama \u0026\u0026 sudo systemctl restart ollama`\n- `ollama show proxyapi/deepseek/deepseek-v4.1-flash-1017` → `System` block present\n- `OLLAMA_PROVIDERS_CONFIG=/tmp/prompttest/providers.json OLLAMA_HOST=127.0.0.1:11599 ollama serve`\n- `curl /api/chat` → `sys_count:1, prompt_occurrences:1, first_role:system, n_messages:2`\n- `go test ./server/ ./api/ ./cmd/ ./openai/ ./llm/ -count=1` → all ok; `go vet` RC=0\n- `git status --short` → 2 modified, 2 untracked\n- `ps -eo pid,user,args | grep -E \"ollama (serve|run)|echo.py\"` → 954094 (system), 956431 (test, :11599), 957742 (mock)\n\n## Next Steps\n- Behaviour of `/system off` for external models is code-verified only; run it live in the TUI or add a case to `input_test.go` using `SystemPromptForModel`.\n- Commit `server/external_prompt.go`, `server/external_prompt_test.go` and the two modified files.\n- Update `PLAN-external-api.md` (still 53 lines, no prompt section).\n- Write memory note documenting prompt-file contract (`external_system_prompt.md`, alias, env override).\n- Stop leftover test daemon (PID 956431) and mock server (PID 957742).\n- Optional systemd drop-in `OLLAMA_EXTERNAL_SYSTEM_PROMPT` if path derivation fails under daemon user.\n\ncontinue the task in progress. the history has been compacted, do not mention compaction to the user"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "The bash tool output is being truncated entirely — seems context is full and outputs get omitted. Maybe use read tool with narrow line ranges. Let me test read on a small file.\n\nActually the truncation message says \"output omitted because the context is full\". This suggests my context is nearly full, so tool outputs get dropped. I need to be efficient: minimize tool calls and output. Perhaps I should just do the remaining work with edits and writing, with minimal verification.\n\nRemaining: TUI /system off verification, commit, docs update, memory note, stop leftover servers.\n\nLet me try compact commands that produce almost no output, e.g. `cmd \u003e /dev/null \u0026\u0026 echo pass`.\n\nLet me first check the git diff summary — but outputs are truncated. I have the summary knowledge of what changed.\n\nPlan:\n1. Commit files (with a short message).\n2. Update PLAN-external-api.md — need to append a prompt section. I can use `cat \u003e\u003e` via bash with heredoc, minimal output.\n3. Memory note: where? Probably ~/.ollama or repo. Memory notes earlier likely in some location. Unknown. Maybe there's a \"memory\" dir. Skip? Summary says \"Write memory note documenting prompt-file contract\". Let me check if there's a memory dir quickly with a no-output command.\n4. Stop leftover mock server \u0026 test daemon (kill by PID 956431, 957742).\n5. TUI /system off: existing test already covers that built-in prompt is suppressed (test at line 1154). But does external prompt get suppressed in TUI? The TUI reads System from `ollama show`, then m.opts.SystemPrompt includes it; /system off disables m.opts.SystemPrompt. Let me check `agentSystemFromShow` and `agentSystemPromptWithWorkingDir` to confirm the show System is included in the prompt and whether \"Built-in system prompt is off\" leaves it out. Look at systemPrompt() — yes, it drops m.opts.SystemPrompt entirely when disabled. But the SYSTEM prompt from show is combined in agentSystemPromptWithWorkingDir? Let's check: agentSystemFromShow returns the ShowResponse.System, and agentSystemPromptWithWorkingDir(model, agentSystemFromShow(...), skill context, cwd) builds the prompt. So the show System gets merged into opts.SystemPrompt at startup → /system off drops it. Good, but I should verify with an actual test rather than reasoning — maybe add a unit test showing that when SystemPrompt comes from show and /system off is used, the request has no system message. Existing test covers that generically (the prompt is m.opts.SystemPrompt). I could add a targeted test in cmd/agent or run the actual TUI... Running an interactive TUI is hard. A verifiable runtime check: use `ollama run` non-interactive? Hmm.\n\nActually a real runtime check is feasible: the TUI is interactive. Alternatively verify at the API layer: `/api/chat` with system message → no duplication (already verified). For TUI /system off, unit test is adequate.\n\nLet me be pragmatic: add a unit test asserting that a show-derived prompt is dropped on /system off — but existing test essentially does that. Instead, I can note it as verified by existing test and by code path.\n\nGiven context constraints, prioritize: commit, docs, cleanup, memory note.\n\nLet's run commands with output suppressed.",
+      "tool_calls": [
+        {
+          "id": "call_00_f84jgg1bboxa8fo2zbs0n05d",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 git add server/external_prompt.go server/external_prompt_test.go server/external_proxy.go server/routes.go \u0026\u0026 git commit -q -m \"server: universal system prompt for external provider models\n\nExternal models (provider/vendor/model) get a prompt from\n\\$OLLAMA_HOME/external_system_prompt.md (alias system_prompt.md) next to\nproviders.json, or \\$OLLAMA_EXTERNAL_SYSTEM_PROMPT when set. It is\ninjected once into outgoing OpenAI requests and exposed via ShowResponse.System\nso the TUIs include it. mtime+size cache; local models untouched.\" \u0026\u0026 git log --oneline -1 \u003e /tmp/c.txt; cat /tmp/c.txt"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "[tool output truncated: output omitted because the context is full; omitted ~18 tokens. Use a narrower command, line range, or search query if more detail is needed.]",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_f84jgg1bboxa8fo2zbs0n05d"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Output truncated. Let me check git log with narrower command.",
+      "tool_calls": [
+        {
+          "id": "call_00_o7svs0bh07ddctopnoveigz5",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 git log --oneline -1 | cut -c1-50 \u0026\u0026 git status --short | head -5"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "49a0fb12 server: universal system prompt for exter\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_o7svs0bh07ddctopnoveigz5"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Commit done, working tree clean. Now next steps: docs update PLAN-external-api.md, memory note, live test of /system off, stop leftover daemons.\n\nLet's stop the leftover test daemon and mock first (safe cleanup), then docs.\n\nActually let me check the plan file.",
+      "tool_calls": [
+        {
+          "id": "call_00_pojvpfnbqvqxqxjwy9aep53o",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "kill 956431 957742 2\u003e/dev/null; sleep 1; ps -eo pid,args | grep -E \"ollama serve|echo.py\" | grep -v grep | cut -c1-90"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": " 954094 /usr/local/bin/ollama serve\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_pojvpfnbqvqxqxjwy9aep53o"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Leftover test daemon and mock stopped. Now: add test for /system off with external prompt, or verify live. Let's look at input_test.go:1132 test and the code paths to add an external-model variant test.\n\nLet me inspect the relevant files.",
+      "tool_calls": [
+        {
+          "id": "call_00_7douhe5cu9mxxn3z6cpq5pps",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 1120,1190p cmd/tui/chat/input_test.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "func TestChatToolsCommandUsage(t *testing.T) {\n\tm := chatModel{input: []rune(\"/tools off\")}\n\n\tupdated, cmd := m.handleSubmit()\n\tif cmd != nil {\n\t\tt.Fatal(\"invalid /tools should not start a command\")\n\t}\n\tm = updated.(chatModel)\n\tif m.status != \"error\" || len(m.entries) != 1 || !strings.Contains(m.entries[0].content, \"usage: /tools\") {\n\t\tt.Fatalf(\"invalid /tools result = status:%q entries:%#v\", m.status, m.entries)\n\t}\n}\n\nfunc TestChatSystemCommandControlsBuiltInSystemPrompt(t *testing.T) {\n\tclient := \u0026chatCaptureClient{}\n\tm := chatModel{\n\t\tctx:   context.Background(),\n\t\tinput: []rune(\"/system\"),\n\t\topts: Options{\n\t\t\tModel:        \"test\",\n\t\t\tClient:       client,\n\t\t\tSystemPrompt: \"canonical agent prompt\",\n\t\t},\n\t}\n\n\tupdated, cmd := m.handleSubmit()\n\tif cmd != nil {\n\t\tt.Fatal(\"/system should not start a run\")\n\t}\n\tm = updated.(chatModel)\n\tif len(m.entries) != 1 || m.entries[0].role != \"slash\" || m.entries[0].content != \"Built-in system prompt is on.\\n\\ncanonical agent prompt\\n\\nWarning: Changing the system prompt during a session breaks the prompt cache.\" {\n\t\tt.Fatalf(\"/system entry = %#v\", m.entries)\n\t}\n\n\tm.input = []rune(\"/system off\")\n\tupdated, _ = m.handleSubmit()\n\tm = updated.(chatModel)\n\tif !m.systemPromptDisabled || m.status != \"system prompt off\" {\n\t\tt.Fatalf(\"/system off state = disabled:%v status:%q\", m.systemPromptDisabled, m.status)\n\t}\n\tm.input = []rune(\"/system\")\n\tupdated, _ = m.handleSubmit()\n\tm = updated.(chatModel)\n\tif got := m.entries[len(m.entries)-1].content; got != \"Built-in system prompt is off.\\n\\ncanonical agent prompt\\n\\nWarning: Changing the system prompt during a session breaks the prompt cache.\" {\n\t\tt.Fatalf(\"/system off entry = %q\", got)\n\t}\n\tupdated, cmd = m.startRun(\"hello\")\n\tif cmd == nil {\n\t\tt.Fatal(\"run after /system off should start\")\n\t}\n\tm = updated.(chatModel)\n\tif done := waitForRunDone(t, m.events); done.err != nil {\n\t\tt.Fatalf(\"run after /system off: %v\", done.err)\n\t}\n\tif len(client.requests) != 1 || len(client.requests[0].Messages) != 1 || client.requests[0].Messages[0].Role != \"user\" {\n\t\tt.Fatalf(\"request after /system off = %#v\", client.requests)\n\t}\n\n\tm.input = []rune(\"/system ON\")\n\tupdated, _ = m.handleSubmit()\n\tm = updated.(chatModel)\n\tif m.systemPromptDisabled || m.status != \"system prompt on\" {\n\t\tt.Fatalf(\"/system on state = disabled:%v status:%q\", m.systemPromptDisabled, m.status)\n\t}\n\tupdated, cmd = m.startRun(\"hello again\")\n\tif cmd == nil {\n\t\tt.Fatal(\"run after /system on should start\")\n\t}\n\tm = updated.(chatModel)\n\tif done := waitForRunDone(t, m.events); done.err != nil {\n\t\tt.Fatalf(\"run after /system on: %v\", done.err)\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_7douhe5cu9mxxn3z6cpq5pps"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now I want to add a test case using SystemPromptForModel (external prompt). Let me look at how SystemPromptForModel works and how the TUI computes system prompt. From summary: cmd/agent_tui.go:158 wires AgentSystem via agentSystemFromShow → reads ShowResponse.System. Let's check the function name in server package.",
+      "tool_calls": [
+        {
+          "id": "call_00_k87e37y5vfu3fsak7iyalin0",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -rn \"SystemPromptForModel\" --include=*.go | cut -c1-140"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "cmd/agent_tui.go:158:\t\tSystemPromptForModel: func(ctx context.Context, model string, registry *coreagent.Registry, toolsDisabled bool) strin\ncmd/tui/chat/modals_test.go:285:\t\t\tSystemPromptForModel: func(ctx context.Context, model string, registry *coreagent.Registry, toolsDisabled\ncmd/tui/chat/modals_test.go:393:\t\t\tSystemPromptForModel: func(_ context.Context, model string, _ *coreagent.Registry, _ bool) string {\ncmd/tui/chat/modals.go:215:\tif m.opts.SystemPromptForModel != nil {\ncmd/tui/chat/modals.go:216:\t\tm.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, modelName, m.opts.Tools, m.opts.ToolsDisabled)\ncmd/tui/chat/chat.go:62:\tSystemPromptForModel        func(context.Context, string, *coreagent.Registry, bool) string\ncmd/tui/chat/input.go:412:\tif m.opts.SystemPromptForModel != nil {\ncmd/tui/chat/input.go:413:\t\tm.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, m.opts.Model, m.opts.Tools, m.opts.ToolsDisabled)\ncmd/tui/chat/input.go:511:\tif m.opts.SystemPromptForModel != nil {\ncmd/tui/chat/input.go:512:\t\tm.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, m.opts.Model, m.opts.Tools, m.opts.ToolsDisabled)\ncmd/tui/chat/input_test.go:639:\t\t\tSystemPromptForModel: func(_ context.Context, _ string, got *coreagent.Registry, _ bool) string {\ncmd/tui/chat/input_test.go:714:\t\t\tSystemPromptForModel: func(_ context.Context, _ string, got *coreagent.Registry, _ bool) string {\ncmd/tui/chat/input_test.go:783:\t\tSystemPromptForModel: func(_ context.Context, _ string, got *coreagent.Registry, _ bool) string {\ncmd/tui/chat/input_test.go:1099:\t\t\tSystemPromptForModel: func(_ context.Context, _ string, _ *coreagent.Registry, disabled bool) string {\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_k87e37y5vfu3fsak7iyalin0"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_yml53bo803d1sdhjnild60u3",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 1085,1120p cmd/tui/chat/input_test.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "\treq, _ = m.requestPreview()\n\tif got := len(req.Tools); got != 1 {\n\t\tt.Fatalf(\"request preview tools = %d, want 1\", got)\n\t}\n}\n\nfunc TestChatToolsCommandRefreshesCapabilityAwareSystemPrompt(t *testing.T) {\n\tregistry := \u0026coreagent.Registry{}\n\tregistry.Register(chatTestTool{})\n\tm := chatModel{\n\t\tctx: context.Background(),\n\t\topts: Options{\n\t\t\tModel: \"test\",\n\t\t\tTools: registry,\n\t\t\tSystemPromptForModel: func(_ context.Context, _ string, _ *coreagent.Registry, disabled bool) string {\n\t\t\t\tif disabled {\n\t\t\t\t\treturn \"tools disabled\"\n\t\t\t\t}\n\t\t\t\treturn \"tools enabled\"\n\t\t\t},\n\t\t},\n\t}\n\n\tupdated, _ := m.handleToolsCommand(\"\")\n\tm = updated.(chatModel)\n\tif m.opts.SystemPrompt != \"tools disabled\" {\n\t\tt.Fatalf(\"system prompt = %q, want disabled prompt\", m.opts.SystemPrompt)\n\t}\n\tupdated, _ = m.handleToolsCommand(\"\")\n\tm = updated.(chatModel)\n\tif m.opts.SystemPrompt != \"tools enabled\" {\n\t\tt.Fatalf(\"system prompt = %q, want enabled prompt\", m.opts.SystemPrompt)\n\t}\n}\n\nfunc TestChatToolsCommandUsage(t *testing.T) {\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_yml53bo803d1sdhjnild60u3"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now let's add a test that `/system off` disables the external prompt when SystemPromptForModel provides it. Let's look at handleSystemCommand code 500-545 and systemPrompt() around 1828.",
+      "tool_calls": [
+        {
+          "id": "call_00_qb00afxmxlqbgnr6p6py62h7",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 495,545p cmd/tui/chat/input.go \u0026\u0026 echo ---- \u0026\u0026 sed -n 1820,1850p cmd/tui/chat/input.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "func (m *chatModel) handleToolsCommand(args string) (tea.Model, tea.Cmd) {\n\tif strings.TrimSpace(args) != \"\" {\n\t\tm.status = \"error\"\n\t\tm.entries = append(m.entries, newChatEntry(chatEntry{role: \"error\", content: \"usage: /tools\"}))\n\t\treturn *m, nil\n\t}\n\tif m.opts.ToolsDisabled {\n\t\tm.opts.ToolsDisabled = false\n\t\tif m.opts.ToolRegistryForModel != nil {\n\t\t\tm.opts.Tools = m.opts.ToolRegistryForModel(m.ctx, m.opts.Model)\n\t\t}\n\t\tm.status = \"tools on\"\n\t} else {\n\t\tm.opts.ToolsDisabled = true\n\t\tm.status = \"tools off\"\n\t}\n\tif m.opts.SystemPromptForModel != nil {\n\t\tm.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, m.opts.Model, m.opts.Tools, m.opts.ToolsDisabled)\n\t}\n\treturn *m, nil\n}\n\nfunc (m *chatModel) handleSystemCommand(args string) (tea.Model, tea.Cmd) {\n\tswitch strings.ToLower(strings.TrimSpace(args)) {\n\tcase \"\":\n\t\tm.entries = append(m.entries, newSlashEntry(m.systemCommandOutput()))\n\tcase \"on\":\n\t\tm.systemPromptDisabled = false\n\t\tm.status = \"system prompt on\"\n\t\tm.entries = append(m.entries, newSlashEntry(m.systemCommandOutput()))\n\tcase \"off\":\n\t\tm.systemPromptDisabled = true\n\t\tm.status = \"system prompt off\"\n\t\tm.entries = append(m.entries, newSlashEntry(m.systemCommandOutput()))\n\tdefault:\n\t\tm.status = \"error\"\n\t\tm.entries = append(m.entries, newChatEntry(chatEntry{role: \"error\", content: \"usage: /system [on|off]\"}))\n\t}\n\treturn *m, nil\n}\n\nfunc (m chatModel) systemPromptState() string {\n\tif m.systemPromptDisabled {\n\t\treturn \"off\"\n\t}\n\treturn \"on\"\n}\n\nfunc (m chatModel) systemCommandOutput() string {\n\tprompt := strings.TrimSpace(m.opts.SystemPrompt)\n\tif prompt == \"\" {\n----\n\t\t\"- `shift+tab`: toggle permission mode\",\n\t\t\"- `ctrl+o`: toggle transcript details\",\n\t\t\"- `↑/↓`: previous or next prompt\",\n\t\t\"- `ctrl+a/e`: move to line start or end\",\n\t)\n\treturn strings.Join(lines, \"\\n\")\n}\n\nfunc (m chatModel) systemPrompt(extra string) string {\n\tvar parts []string\n\tif !m.systemPromptDisabled \u0026\u0026 strings.TrimSpace(m.opts.SystemPrompt) != \"\" {\n\t\tparts = append(parts, strings.TrimSpace(m.opts.SystemPrompt))\n\t}\n\tif strings.TrimSpace(extra) != \"\" {\n\t\tparts = append(parts, strings.TrimSpace(extra))\n\t}\n\treturn strings.Join(parts, \"\\n\\n\")\n}\n\n// stripQuotes removes surrounding single or double quotes from a string.\nfunc stripQuotes(s string) string {\n\ts = strings.TrimSpace(s)\n\tif len(s) \u003e= 2 {\n\t\tif (s[0] == '\"' \u0026\u0026 s[len(s)-1] == '\"') || (s[0] == '\\'' \u0026\u0026 s[len(s)-1] == '\\'') {\n\t\t\treturn s[1 : len(s)-1]\n\t\t}\n\t}\n\treturn s\n}\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_qb00afxmxlqbgnr6p6py62h7"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now I want to add a test in input_test.go that covers /system off with an external prompt via SystemPromptForModel. Let me write a test: chatModel with SystemPromptForModel returning external prompt, and verify:\n- /system on → request includes external prompt\n- /system off → request has only user message\n- /system ON → prompt back.\n\nLet me check the test helpers (chatCaptureClient, startRun, waitForRunDone) - they're used above. Let me look at how the run request is built to make sure SystemPrompt gets into messages. Let me just write it modeled on the existing test.\n\nLet me check chatCaptureClient definition and see whether it applies opts.SystemPrompt.",
+      "tool_calls": [
+        {
+          "id": "call_00_qpkch5v8ebhn5l937fy9t68d",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -n \"type chatCaptureClient\" -A 30 cmd/tui/chat/input_test.go | cut -c1-120"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "(no output)",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_qpkch5v8ebhn5l937fy9t68d"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_7ss7v6xclu9i4e1k2mfecil4",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -rn \"chatCaptureClient\" --include=*_test.go cmd/tui/chat | head -3 \u0026\u0026 grep -rn \"chatCaptureClient struct\" -A 25 cmd/tui/chat/*_test.go | cut -c1-120"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "cmd/tui/chat/modals_test.go:380:\tclient := \u0026chatCaptureClient{}\ncmd/tui/chat/test_helpers_test.go:20:type chatCaptureClient struct {\ncmd/tui/chat/test_helpers_test.go:39:func (c *chatCaptureClient) Chat(ctx context.Context, req *api.ChatRequest, fn api.ChatResponseFunc) error {\ncmd/tui/chat/test_helpers_test.go:20:type chatCaptureClient struct {\ncmd/tui/chat/test_helpers_test.go-21-\trequests []*api.ChatRequest\ncmd/tui/chat/test_helpers_test.go-22-}\ncmd/tui/chat/test_helpers_test.go-23-\ncmd/tui/chat/test_helpers_test.go-24-type chatToolLoopClient struct {\ncmd/tui/chat/test_helpers_test.go-25-\tcalls      int\ncmd/tui/chat/test_helpers_test.go-26-\ttoolRounds int\ncmd/tui/chat/test_helpers_test.go-27-}\ncmd/tui/chat/test_helpers_test.go-28-\ncmd/tui/chat/test_helpers_test.go-29-func (chatTestClient) Chat(ctx context.Context, req *api.ChatRequest, fn api.ChatRe\ncmd/tui/chat/test_helpers_test.go-30-\tif err := ctx.Err(); err != nil {\ncmd/tui/chat/test_helpers_test.go-31-\t\treturn err\ncmd/tui/chat/test_helpers_test.go-32-\t}\ncmd/tui/chat/test_helpers_test.go-33-\treturn fn(api.ChatResponse{\ncmd/tui/chat/test_helpers_test.go-34-\t\tMessage: api.Message{Role: \"assistant\", Content: \"ok\"},\ncmd/tui/chat/test_helpers_test.go-35-\t\tDone:    true,\ncmd/tui/chat/test_helpers_test.go-36-\t})\ncmd/tui/chat/test_helpers_test.go-37-}\ncmd/tui/chat/test_helpers_test.go-38-\ncmd/tui/chat/test_helpers_test.go-39-func (c *chatCaptureClient) Chat(ctx context.Context, req *api.ChatRequest, fn api.\ncmd/tui/chat/test_helpers_test.go-40-\tif err := ctx.Err(); err != nil {\ncmd/tui/chat/test_helpers_test.go-41-\t\treturn err\ncmd/tui/chat/test_helpers_test.go-42-\t}\ncmd/tui/chat/test_helpers_test.go-43-\tc.requests = append(c.requests, req)\ncmd/tui/chat/test_helpers_test.go-44-\treturn fn(api.ChatResponse{\ncmd/tui/chat/test_helpers_test.go-45-\t\tMessage: api.Message{Role: \"assistant\", Content: \"ok\"},\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_7ss7v6xclu9i4e1k2mfecil4"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now let me add a test covering /system off with an external prompt via SystemPromptForModel. Where should it go — input_test.go after TestChatSystemCommandControlsBuiltInSystemPrompt. Let me view the end of that test to find insertion point.",
+      "tool_calls": [
+        {
+          "id": "call_00_55kotxubl1ytjgd0206ro3x6",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 1190,1215p cmd/tui/chat/input_test.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "\t\tt.Fatalf(\"run after /system on: %v\", done.err)\n\t}\n\tif len(client.requests) != 2 {\n\t\tt.Fatalf(\"client requests = %d, want 2\", len(client.requests))\n\t}\n\trequest := client.requests[1]\n\tif len(request.Messages) != 2 || request.Messages[0].Role != \"system\" || request.Messages[0].Content != \"canonical agent prompt\" {\n\t\tt.Fatalf(\"request after /system on = %#v\", request.Messages)\n\t}\n\n\tm.input = []rune(\"/system sometimes\")\n\tupdated, _ = m.handleSubmit()\n\tm = updated.(chatModel)\n\tif m.status != \"error\" || len(m.entries) == 0 || m.entries[len(m.entries)-1].content != \"usage: /system [on|off]\" {\n\t\tt.Fatalf(\"invalid /system result = status:%q entries:%#v\", m.status, m.entries)\n\t}\n}\n\nfunc TestChatSystemCommandArgumentCompletions(t *testing.T) {\n\tfor _, tt := range []struct {\n\t\tinput string\n\t\twant  []string\n\t}{\n\t\t{input: \"/system \", want: []string{\"/system on\", \"/system off\"}},\n\t\t{input: \"/system o\", want: []string{\"/system on\", \"/system off\"}},\n\t\t{input: \"/system on\", want: []string{\"/system on\"}},\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_55kotxubl1ytjgd0206ro3x6"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now I'll add a test using SystemPromptForModel to simulate external model prompt, verifying /system off drops it. Insert after TestChatSystemCommandControlsBuiltInSystemPrompt.\n\nAlso need to check startRun and whether SystemPromptForModel is also called in startRun. Line 412 in input.go — let's check context.",
+      "tool_calls": [
+        {
+          "id": "call_00_5315iky7lg29sii2e3k32a76",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 400,425p cmd/tui/chat/input.go \u0026\u0026 echo ---- \u0026\u0026 grep -n \"func (m chatModel) startRun\\|func (m \\*chatModel) startRun\" -A 25 cmd/tui/chat/input.go | cut -c1-110"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "\t}\n\tm.opts.Skills = catalog\n\tm.refreshToolsAndSystem()\n\treturn catalog, nil\n}\n\n// refreshToolsAndSystem rebuilds the tool registry and system prompt after a\n// runtime change (skill or MCP reload) without touching conversation entries.\nfunc (m *chatModel) refreshToolsAndSystem() {\n\tif m.opts.ToolRegistryForModel != nil \u0026\u0026 m.opts.Model != \"\" {\n\t\tm.opts.Tools = m.opts.ToolRegistryForModel(m.ctx, m.opts.Model)\n\t}\n\tif m.opts.SystemPromptForModel != nil {\n\t\tm.opts.SystemPrompt = m.opts.SystemPromptForModel(m.ctx, m.opts.Model, m.opts.Tools, m.opts.ToolsDisabled)\n\t}\n}\n\nfunc (m *chatModel) handleMCPCommand(args string) (tea.Model, tea.Cmd) {\n\tfields := strings.Fields(args)\n\tif len(fields) == 1 \u0026\u0026 fields[0] == \"reload\" {\n\t\tif m.opts.ReloadMCPs == nil {\n\t\t\tm.entries = append(m.entries, newChatEntry(chatEntry{role: \"error\", content: \"MCP reload is not available in this session.\"}))\n\t\t\treturn *m, nil\n\t\t}\n\t\tnames, err := m.opts.ReloadMCPs(m.ctx)\n\t\tif err != nil {\n----\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_5315iky7lg29sii2e3k32a76"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Let me find startRun signature and how it builds messages, then write the test.",
+      "tool_calls": [
+        {
+          "id": "call_00_w8em8ssiyyxt2yoycbt2e37v",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -rn \"startRun(\" cmd/tui/chat/*.go | grep -v _test | cut -c1-100"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "cmd/tui/chat/chat.go:324:\t\t\tmodel, cmd := m.startRun(m.heartbeatMsg)\ncmd/tui/chat/chat.go:489:\t\t\t\treturn m.startRun(queuedMessagePrefix(next))\ncmd/tui/chat/chat.go:508:\t\t\treturn m.startRun(queuedMessagePrefix(next))\ncmd/tui/chat/chat.go:548:\t\t\treturn m.startRun(queuedMessagePrefix(next))\ncmd/tui/chat/chat.go:1192:func (m *chatModel) startRun(input string) (tea.Model, tea.Cmd) {\ncmd/tui/chat/input.go:293:\t\treturn m.startRun(input)\ncmd/tui/chat/input.go:299:\treturn m.startRun(input)\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_w8em8ssiyyxt2yoycbt2e37v"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_nd4g2jf4oh4a83vz3vhgifoq",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 1280,1320p cmd/tui/chat/chat.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "\t\tm.entries = append(m.entries, entriesFromMessages(newMessages[1:])...)\n\t}\n\tm.running = true\n\tm.awaitingModel = true\n\tm.runStartEntryIdx = len(m.entries)\n\tm.status = \"running\"\n\tm.spinner = 0\n\tm.scroll = 0\n\tm.detectedToolCalls = nil\n\tm.thinking = false\n\tm.thinkingTokens = 0\n\tm.runThinkingTokens = 0\n\tm.runOutputText = \"\"\n\tm.eventErrorRendered = false\n\tsystemPrompt := m.systemPrompt(extraSystemPrompt)\n\tm.liveMessages = append(slices.Clone(m.messages), newMessages...)\n\tm.contextTokens = m.estimatePromptTokens(m.liveMessages, systemPrompt)\n\tm.contextEstimate = true\n\n\trunCtx, cancel := context.WithCancel(m.ctx)\n\tm.cancel = cancel\n\tevents := make(chan tea.Msg, 128)\n\tm.events = events\n\tm.approvalController = newChatApprovalController(events, m.ensureApprovalState())\n\n\tvar newMessagesPersisted bool\n\teventSinks := []coreagent.EventSink{chatEventSink{ctx: runCtx, ch: events, newMessagesPersisted: \u0026newMessagesPersisted}}\n\teventSinks = append(eventSinks, m.opts.EventSinks...)\n\n\tsession := \u0026coreagent.Session{\n\t\tClient:           m.opts.Client,\n\t\tEventSinks:       eventSinks,\n\t\tTools:            m.opts.Tools,\n\t\tSkills:           m.opts.Skills,\n\t\tDisableTools:     m.opts.ToolsDisabled,\n\t\tApprovalPrompter: m.approvalPrompterForRun(m.approvalController),\n\t\tApprovalState:    m.ensureApprovalState(),\n\t\tWorkingDir:       m.currentWorkingDir(),\n\t\tCompactor:        m.opts.Compactor,\n\t}\n\topts := coreagent.RunOptions{\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_nd4g2jf4oh4a83vz3vhgifoq"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "I'll add a test to input_test.go verifying the external prompt (SystemPromptForModel) gets dropped by /system off and included by /system on. Test must mirror the existing test but with SystemPromptForModel returning the external prompt text.\n\nLet me write the test. I need to look at chatModel fields and startRun signature, waitForRunDone helper. Reuse design of existing test.\n\nAdd after TestChatSystemCommandControlsBuiltInSystemPrompt.",
+      "tool_calls": [
+        {
+          "id": "call_00_7j0jngcxxdv8unfdg1apxzl6",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -n \"func waitForRunDone\" -A 15 cmd/tui/chat/*_test.go | cut -c1-110"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "cmd/tui/chat/test_helpers_test.go:92:func waitForRunDone(t *testing.T, events \u003c-chan tea.Msg) chatRunDoneMsg {\ncmd/tui/chat/test_helpers_test.go-93-\tt.Helper()\ncmd/tui/chat/test_helpers_test.go-94-\ttimeout := time.After(2 * time.Second)\ncmd/tui/chat/test_helpers_test.go-95-\tfor {\ncmd/tui/chat/test_helpers_test.go-96-\t\tselect {\ncmd/tui/chat/test_helpers_test.go-97-\t\tcase msg, ok := \u003c-events:\ncmd/tui/chat/test_helpers_test.go-98-\t\t\tif !ok {\ncmd/tui/chat/test_helpers_test.go-99-\t\t\t\tt.Fatal(\"events closed before run done\")\ncmd/tui/chat/test_helpers_test.go-100-\t\t\t}\ncmd/tui/chat/test_helpers_test.go-101-\t\t\tif done, ok := msg.(chatRunDoneMsg); ok {\ncmd/tui/chat/test_helpers_test.go-102-\t\t\t\treturn done\ncmd/tui/chat/test_helpers_test.go-103-\t\t\t}\ncmd/tui/chat/test_helpers_test.go-104-\t\tcase \u003c-timeout:\ncmd/tui/chat/test_helpers_test.go-105-\t\t\tt.Fatal(\"timed out waiting for run done\")\ncmd/tui/chat/test_helpers_test.go-106-\t\t}\ncmd/tui/chat/test_helpers_test.go-107-\t}\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_7j0jngcxxdv8unfdg1apxzl6"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now add a test: /system off with external prompt via SystemPromptForModel. Note: handleSystemCommand does not call SystemPromptForModel (unlike /tools). opts.SystemPrompt is set at init. The test should verify that after /system off, the request has no system message even though opts.SystemPrompt is the external prompt. And /system on restores it.\n\nLet me write the test appended after TestChatSystemCommandControlsBuiltInSystemPrompt.",
+      "tool_calls": [
+        {
+          "id": "call_00_efyqxbtsh6isotbxxhqjwa4f",
+          "function": {
+            "index": 0,
+            "name": "read",
+            "arguments": {
+              "end": 1214,
+              "path": "/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork/cmd/tui/chat/input_test.go",
+              "start": 1206
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "}\n\nfunc TestChatSystemCommandArgumentCompletions(t *testing.T) {\n\tfor _, tt := range []struct {\n\t\tinput string\n\t\twant  []string\n\t}{\n\t\t{input: \"/system \", want: []string{\"/system on\", \"/system off\"}},\n\t\t{input: \"/system o\", want: []string{\"/system on\", \"/system off\"}},\n",
+      "tool_name": "read",
+      "tool_call_id": "call_00_efyqxbtsh6isotbxxhqjwa4f"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now add a test that uses SystemPromptForModel with an external prompt to verify /system off hides it. Insert after TestChatSystemCommandControlsBuiltInSystemPrompt (line 1206 end). Let me write the test.",
+      "tool_calls": [
+        {
+          "id": "call_00_1lglhqrexd0nr8g6odf5va8n",
+          "function": {
+            "index": 0,
+            "name": "edit",
+            "arguments": {
+              "edits": [
+                {
+                  "new_text": "func TestChatSystemCommandControlsExternalSystemPrompt(t *testing.T) {\n\tconst externalPrompt = \"universal external provider prompt\"\n\tclient := \u0026chatCaptureClient{}\n\tm := chatModel{\n\t\tctx:   context.Background(),\n\t\tinput: []rune(\"/system off\"),\n\t\topts: Options{\n\t\t\tModel:  \"proxyapi/deepseek/deepseek-v4.1-flash-1017\",\n\t\t\tClient: client,\n\t\t\tSystemPromptForModel: func(_ context.Context, _ string, _ *coreagent.Registry, _ bool) string {\n\t\t\t\treturn externalPrompt\n\t\t\t},\n\t\t},\n\t}\n\n\tm.opts.SystemPrompt = externalPrompt\n\tupdated, _ := m.handleSubmit()\n\tm = updated.(chatModel)\n\tif !m.systemPromptDisabled {\n\t\tt.Fatal(\"/system off should disable the external prompt\")\n\t}\n\n\tupdated, cmd := m.startRun(\"hello\")\n\tif cmd == nil {\n\t\tt.Fatal(\"run after /system off should start\")\n\t}\n\tm = updated.(chatModel)\n\tif done := waitForRunDone(t, m.events); done.err != nil {\n\t\tt.Fatalf(\"run after /system off: %v\", done.err)\n\t}\n\tif len(client.requests) != 1 {\n\t\tt.Fatalf(\"client requests = %d, want 1\", len(client.requests))\n\t}\n\tfor _, msg := range client.requests[0].Messages {\n\t\tif msg.Role == \"system\" || strings.Contains(msg.Content, externalPrompt) {\n\t\t\tt.Fatalf(\"/system off leaked external prompt: %#v\", client.requests[0].Messages)\n\t\t}\n\t}\n\n\tm.input = []rune(\"/system on\")\n\tupdated, _ = m.handleSubmit()\n\tm = updated.(chatModel)\n\tif m.systemPromptDisabled {\n\t\tt.Fatal(\"/system on should re-enable the external prompt\")\n\t}\n\tupdated, cmd = m.startRun(\"hello again\")\n\tif cmd == nil {\n\t\tt.Fatal(\"run after /system on should start\")\n\t}\n\tm = updated.(chatModel)\n\tif done := waitForRunDone(t, m.events); done.err != nil {\n\t\tt.Fatalf(\"run after /system on: %v\", done.err)\n\t}\n\tif len(client.requests) != 2 {\n\t\tt.Fatalf(\"client requests = %d, want 2\", len(client.requests))\n\t}\n\tmsgs := client.requests[1].Messages\n\tif len(msgs) == 0 || msgs[0].Role != \"system\" || !strings.Contains(msgs[0].Content, externalPrompt) {\n\t\tt.Fatalf(\"request after /system on = %#v\", msgs)\n\t}\n}\n\nfunc TestChatSystemCommandArgumentCompletions(t *testing.T) {",
+                  "old_text": "func TestChatSystemCommandArgumentCompletions(t *testing.T) {"
+                }
+              ],
+              "path": "/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork/cmd/tui/chat/input_test.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Updated /home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork/cmd/tui/chat/input_test.go (1 edit, 1 replacement).",
+      "tool_name": "edit",
+      "tool_call_id": "call_00_1lglhqrexd0nr8g6odf5va8n"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Wait: m.input = \"/system off\" but opts.SystemPrompt set after struct creation. handleSubmit with \"/system off\" sets disabled. But systemCommandOutput uses opts.SystemPrompt. Fine.\n\nBut note: in startRun, systemPrompt computed from m.systemPrompt(extra). Does startRun refresh opts.SystemPrompt via SystemPromptForModel? Let's check startRun code near 1192.",
+      "tool_calls": [
+        {
+          "id": "call_00_58m3vrvx4wqez5j18xedtknh",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 go test ./cmd/tui/chat/ -run 'TestChatSystemCommand' -count=1 2\u003e\u00261 | tail -20"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "ok  \tgithub.com/ollama/ollama/cmd/tui/chat\t0.007s\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_58m3vrvx4wqez5j18xedtknh"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Test passes. But wait — did it actually assert the prompt absent? Yes it loops messages. Good.\n\nNow let's verify the test fails if behaviour regressed? Not necessary.\n\nNow update PLAN-external-api.md and write memory note. Let's read the plan file.",
+      "tool_calls": [
+        {
+          "id": "call_00_c3nz2rnjsanh50dzhfkvwskp",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 cat -n PLAN-external-api.md"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "     1\t# План: внешний API провайдера как виртуальная модель в TUI\n     2\t\n     3\tЦель: позволить использовать OpenAI-совместимый endpoint + API-ключ купленного\n     4\tпровайдера (Groq/OpenAI/Mistral/Together и т.п.) прямо в ollama TUI —\n     5\tвыбор из `/model`, стриминг в чате, счётчики токенов — без `ollama run`\n     6\tи без загрузки весов локально.\n     7\t\n     8\t## Текущее состояние (разведка 2026-09-19)\n     9\t- Чужих API-ключей нигде нет: ни `/api`, ни env для внешних провайдеров.\n    10\t- Единственный remote-прокси — Ollama Cloud (`name:cloud` → `server/cloud_proxy.go`,\n    11\t  подпись SSH-ключом `~/.ollama/id_ed25519`, база `OLLAMA_CLOUD_BASE_URL`).\n    12\t- Его паттерн (middleware на пути `/api/chat`, стриминг jsonl) — образец для повторения.\n    13\t\n    14\t## Этап 0 — Разведка (30 мин)\n    15\t- [ ] Прочитать `server/cloud_proxy.go` целиком: точки входа middleware,\n    16\t      как проксируется body и SSE→jsonl ответ, где висит в `server/routes.go`.\n    17\t- [ ] Посмотреть, как TUI-пикер резолвит имя модели (`cmd/tui/chat/*`,\n    18\t      internal/modelref) — где можно подцепить «внешняя модель».\n    19\t- [ ] Проверить формат стрима ollama `/api/chat` (jsonl) vs SSE `chat/completions`.\n    20\t\n    21\t## Этап 1 — Конфигурация (MVP: env, без файлов)\n    22\t- [ ] `envconfig/config.go`: новые переменные\n    23\t      - `OLLAMA_EXTERNAL_BASE_URL` (OpenAI-совместимый корень, напр. https://api.groq.com/openai/v1)\n    24\t      - `OLLAMA_EXTERNAL_API_KEY`\n    25\t      - (опц.) `OLLAMA_EXTERNAL_MODELS=\"name-a,name-b\"` — имена виртуальных моделей;\n    26\t        без списка — любое непарсится-локально имя шлём на внешний endpoint.\n    27\t- [ ] Идентификация «внешней модели»: суффикс в имени, напр. `ext:\u003cимя\u003e`\n    28\t      (или отдельный источник в `internal/modelref`: ModelSourceExternal).\n    29\t\n    30\t## Этап 2 — Серверный прокси (основной)\n    31\t- [ ] Новый `server/external_proxy.go` по образцу cloud_proxy:\n    32\t      - middleware перехватывает `/api/chat`, где model = внешняя;\n    33\t      - body конвертируется в OpenAI `chat/completions` (stream:true);\n    34\t      - заголовок `Authorization: Bearer \u003ckey\u003e`; без подписи.\n    35\t- [ ] Ответ провайдера (SSE) → стрим jsonl ollama `/api/chat`:\n    36\t      mapping delta.content → message, done → stop_reason (\"stop\"/\"length\").\n    37\t- [ ] Путь для pull-like: внешние имена НЕ качаем; `ollama list` их не показывает\n    38\t      (или показываем отдельной пометкой «external»).\n    39\t\n    40\t## Этап 3 — TUI\n    41\t- [ ] `/model` пикер: если включён external-конфиг — в списке появляются виртуальные модели.\n    42\t- [ ] Ошибки: 401/429 → человекочитаемое сообщение с указанием, чей ключ не сработал.\n    43\t\n    44\t## Этап 4 — Приёмка\n    45\t- [ ] `ext:gpt-oss` (или выбранная) в TUI: стриминг идёт, `/token` считает токены,\n    46\t      stop_reason корректен.\n    47\t- [ ] Локальные модели не затрагиваются (regression-проверка /api/chat локально).\n    48\t- [ ] Без ключа/endpoint — поведение как сейчас (ничего не ломается).\n    49\t\n    50\t## Риски / открытые вопросы\n    51\t- Конфликт суффиксов с `:cloud`/`:local` в modelref — выбрать синтаксис.\n    52\t- Разные форматы стрима провайдеров (anthropic-style, responses API) — MVP только OpenAI SSE.\n    53\t- Логирование ключа: не писать key в логи (`OLLAMA_DEBUG_LOG_REQUESTS` — маскировать).\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_c3nz2rnjsanh50dzhfkvwskp"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now update PLAN-external-api.md to reflect the actual final state (providers.json, universal prompt, etc.). Let me check the actual implementations to document correctly: providers.json structure, external_prompt.go behavior.\n\nLet me read server/external_prompt.go and the providers config loading.",
+      "tool_calls": [
+        {
+          "id": "call_00_x5mda8il0npr9ypxrwcjma32",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 cat -n server/external_prompt.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "     1\tpackage server\n     2\t\n     3\timport (\n     4\t\t\"log/slog\"\n     5\t\t\"os\"\n     6\t\t\"path/filepath\"\n     7\t\t\"strings\"\n     8\t\t\"sync\"\n     9\t\t\"time\"\n    10\t)\n    11\t\n    12\t// [voron] Universal system prompt for external API provider models.\n    13\t//\n    14\t// It lives next to providers.json so a single directory holds all external\n    15\t// provider configuration:\n    16\t//\n    17\t//\t~/.ollama/external_system_prompt.md   (preferred)\n    18\t//\t~/.ollama/system_prompt.md            (accepted alias)\n    19\t//\n    20\t// The prompt is applied ONLY to models served by external providers\n    21\t// (\"provider/vendor/model\"); locally run models are never affected.\n    22\t//\n    23\t// Two injection points use it:\n    24\t//   - ShowHandler: external models report it as ShowResponse.System, so the\n    25\t//     chat/agent TUIs include it in the prompt they build and display;\n    26\t//   - buildOpenAIRequest: raw /api/chat clients that send their own messages\n    27\t//     still get the prompt prepended to the outgoing OpenAI request.\n    28\t//\n    29\t// The file is re-read when its mtime/size changes, so edits apply without a\n    30\t// daemon restart.\n    31\t\n    32\t// externalPromptEnvName optionally points at an explicit prompt file. Like\n    33\t// OLLAMA_PROVIDERS_CONFIG it is authoritative: when set, no other path is\n    34\t// consulted (and tests use it to stay hermetic).\n    35\tconst externalPromptEnvName = \"OLLAMA_EXTERNAL_SYSTEM_PROMPT\"\n    36\t\n    37\t// externalPromptFileNames are the file names looked up inside the config dir.\n    38\tvar externalPromptFileNames = []string{\"external_system_prompt.md\", \"system_prompt.md\"}\n    39\t\n    40\t// externalPromptCache memoises the last successfully read file, keyed by\n    41\t// path/mtime/size, so per-request loading stays cheap.\n    42\ttype externalPromptCacheEntry struct {\n    43\t\tpath    string\n    44\t\tmodTime time.Time\n    45\t\tsize    int64\n    46\t\ttext    string\n    47\t}\n    48\t\n    49\tvar (\n    50\t\texternalPromptMu    sync.Mutex\n    51\t\texternalPromptCache externalPromptCacheEntry\n    52\t)\n    53\t\n    54\t// externalPromptConfigDir mirrors providerConfigPaths' config directory logic.\n    55\t//\n    56\t// The prompt deliberately follows providers.json: the daemon runs as user\n    57\t// \"ollama\" with a different $HOME, so ~/.ollama is usually invisible to it.\n    58\t// When OLLAMA_PROVIDERS_CONFIG points into another user's home (as our systemd\n    59\t// drop-in does), the prompt is looked up in that same directory — no extra\n    60\t// env var or drop-in needed.\n    61\tfunc externalPromptConfigDir() string {\n    62\t\tif explicit := strings.TrimSpace(os.Getenv(providersEnvName)); explicit != \"\" {\n    63\t\t\treturn filepath.Dir(filepath.Clean(explicit))\n    64\t\t}\n    65\t\tif dir := strings.TrimSpace(os.Getenv(\"OLLAMA_HOME\")); dir != \"\" {\n    66\t\t\treturn filepath.Clean(dir)\n    67\t\t}\n    68\t\thome, err := os.UserHomeDir()\n    69\t\tif err != nil {\n    70\t\t\tslog.Warn(\"external prompt: cannot determine home directory\", \"error\", err)\n    71\t\t\treturn \"\"\n    72\t\t}\n    73\t\treturn filepath.Join(home, \".ollama\")\n    74\t}\n    75\t\n    76\t// externalSystemPromptPaths returns candidate prompt paths in priority order.\n    77\tfunc externalSystemPromptPaths() []string {\n    78\t\tif explicit := strings.TrimSpace(os.Getenv(externalPromptEnvName)); explicit != \"\" {\n    79\t\t\treturn []string{filepath.Clean(explicit)}\n    80\t\t}\n    81\t\n    82\t\tdir := externalPromptConfigDir()\n    83\t\tif dir == \"\" {\n    84\t\t\treturn nil\n    85\t\t}\n    86\t\tpaths := make([]string, 0, len(externalPromptFileNames))\n    87\t\tfor _, name := range externalPromptFileNames {\n    88\t\t\tpaths = append(paths, filepath.Join(dir, name))\n    89\t\t}\n    90\t\treturn paths\n    91\t}\n    92\t\n    93\t// externalSystemPrompt returns the universal prompt for external models, or \"\"\n    94\t// when no usable file is configured.\n    95\tfunc externalSystemPrompt() string {\n    96\t\tpaths := externalSystemPromptPaths()\n    97\t\tif len(paths) == 0 {\n    98\t\t\treturn \"\"\n    99\t\t}\n   100\t\n   101\t\texternalPromptMu.Lock()\n   102\t\tdefer externalPromptMu.Unlock()\n   103\t\n   104\t\tfor _, path := range paths {\n   105\t\t\tinfo, err := os.Stat(path)\n   106\t\t\tif err != nil {\n   107\t\t\t\tif !os.IsNotExist(err) {\n   108\t\t\t\t\tslog.Warn(\"external prompt: cannot stat file\", \"path\", path, \"error\", err)\n   109\t\t\t\t}\n   110\t\t\t\tcontinue\n   111\t\t\t}\n   112\t\t\tif info.IsDir() {\n   113\t\t\t\tslog.Warn(\"external prompt: path is a directory\", \"path\", path)\n   114\t\t\t\tcontinue\n   115\t\t\t}\n   116\t\n   117\t\t\tif externalPromptCache.path == path \u0026\u0026\n   118\t\t\t\texternalPromptCache.size == info.Size() \u0026\u0026\n   119\t\t\t\texternalPromptCache.modTime.Equal(info.ModTime()) {\n   120\t\t\t\treturn externalPromptCache.text\n   121\t\t\t}\n   122\t\n   123\t\t\tdata, err := os.ReadFile(path)\n   124\t\t\tif err != nil {\n   125\t\t\t\tslog.Warn(\"external prompt: cannot read file\", \"path\", path, \"error\", err)\n   126\t\t\t\tcontinue\n   127\t\t\t}\n   128\t\n   129\t\t\ttext := strings.TrimSpace(string(data))\n   130\t\t\tif text == \"\" {\n   131\t\t\t\tslog.Warn(\"external prompt: file is empty\", \"path\", path)\n   132\t\t\t\ttext = \"\"\n   133\t\t\t}\n   134\t\t\tslog.Debug(\"external prompt: loaded\", \"path\", path, \"bytes\", len(text))\n   135\t\n   136\t\t\texternalPromptCache = externalPromptCacheEntry{\n   137\t\t\t\tpath:    path,\n   138\t\t\t\tmodTime: info.ModTime(),\n   139\t\t\t\tsize:    info.Size(),\n   140\t\t\t\ttext:    text,\n   141\t\t\t}\n   142\t\t\treturn text\n   143\t\t}\n   144\t\n   145\t\treturn \"\"\n   146\t}\n   147\t\n   148\t// prependExternalSystemPrompt inserts the universal prompt into an outgoing\n   149\t// OpenAI message list. When the caller already sent a system message that\n   150\t// contains the prompt (the TUI does, via ShowResponse.System) nothing is\n   151\t// added, so the prompt is never duplicated.\n   152\tfunc prependExternalSystemPrompt(messages []openaiMessage, prompt string) []openaiMessage {\n   153\t\tprompt = strings.TrimSpace(prompt)\n   154\t\tif prompt == \"\" {\n   155\t\t\treturn messages\n   156\t\t}\n   157\t\n   158\t\tif len(messages) \u003e 0 \u0026\u0026 messages[0].Role == \"system\" {\n   159\t\t\tif strings.Contains(messages[0].Content, prompt) {\n   160\t\t\t\treturn messages\n   161\t\t\t}\n   162\t\t\tmerged := make([]openaiMessage, 0, len(messages))\n   163\t\t\tfirst := messages[0]\n   164\t\t\tfirst.Content = prompt + \"\\n\\n\" + strings.TrimSpace(first.Content)\n   165\t\t\tmerged = append(merged, first)\n   166\t\t\treturn append(merged, messages[1:]...)\n   167\t\t}\n   168\t\n   169\t\tout := make([]openaiMessage, 0, len(messages)+1)\n   170\t\tout = append(out, openaiMessage{Role: \"system\", Content: prompt})\n   171\t\treturn append(out, messages...)\n   172\t}\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_x5mda8il0npr9ypxrwcjma32"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now update PLAN-external-api.md with a section documenting what's implemented. Let me check some details: providers.json format, model naming, etc. Let me look at PLAN doc structure — it's a plan with checkboxes. I'll append a \"Реализовано\" section plus the prompt section.\n\nLet me check the providers.json contract to document accurately.",
+      "tool_calls": [
+        {
+          "id": "call_00_7iowuspf229i8av9ckj6oj2b",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 1,60p server/external_proxy.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "package server\n\nimport (\n\t\"bufio\"\n\t\"bytes\"\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"io\"\n\t\"log/slog\"\n\t\"net/http\"\n\t\"sort\"\n\t\"strings\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// externalProxyMiddleware intercepts /api/chat requests where the model name\n// matches a configured external provider and proxies to its OpenAI-compatible endpoint.\nfunc externalProxyMiddleware() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif c.Request.Method != http.MethodPost {\n\t\t\tc.Next()\n\t\t\treturn\n\t\t}\n\n\t\tbody, err := readRequestBody(c.Request)\n\t\tif err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\tc.Abort()\n\t\t\treturn\n\t\t}\n\n\t\tmodel, ok := extractModelField(body)\n\t\tif !ok {\n\t\t\tc.Next()\n\t\t\treturn\n\t\t}\n\n\t\textRef, isExternal := tryParseExternalModel(model)\n\t\tif !isExternal {\n\t\t\tc.Next()\n\t\t\treturn\n\t\t}\n\n\t\thandleExternalChat(c, extRef, body)\n\t\tc.Abort()\n\t}\n}\n\n// openaiChatRequest is the minimal OpenAI chat/completions request structure.\ntype openaiChatRequest struct {\n\tModel       string          `json:\"model\"`\n\tMessages    []openaiMessage `json:\"messages\"`\n\tStream      bool            `json:\"stream\"`\n\tTools       []openaiTool    `json:\"tools,omitempty\"` // [voron] function calling\n\tMaxTokens   *int            `json:\"max_tokens,omitempty\"`\n\tTemperature *float64        `json:\"temperature,omitempty\"`\n}\n\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_7iowuspf229i8av9ckj6oj2b"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Now update PLAN-external-api.md with a prompt section. Let me write a concise \"Этап 5 — Универсальный системный промпт\" section and update statuses maybe. Let me check what parts are done — the plan is stale, but the user asked to update it with a prompt section. I'll add the prompt section and mark relevant boxes. Let me be careful not to falsely claim things. Known done: external_proxy.go, providers.json, TUI picker presumably. Let me check quickly what's implemented — providers.json based config, TUI /model picker.\n\nActually I'll keep the edits focused: add a new section documenting the prompt, and note current status dated 2026-10-26 marking items verified. But I should be careful to not overclaim. Let me check whether TUI picker lists external models, and whether token counts work.\n\nRather than deep investigation, I'll add section documenting prompt contract with cited file:line references, and a short status line based on what I verified earlier (tests, curl). Keep boxes only for prompt items.",
+      "tool_calls": [
+        {
+          "id": "call_00_lnxilodi7dcpi2j9xkisgqwc",
+          "function": {
+            "index": 0,
+            "name": "edit",
+            "arguments": {
+              "edits": [
+                {
+                  "new_text": "## Этап 5 — Универсальный системный промпт для внешних моделей (сделано 2026-10-26)\n\nПромпт применяется **только** к моделям вида `provider/vendor/model`; локальные\nмодели не затрагиваются ни на одном пути (см. `server/external_proxy.go`,\nветка `tryParseExternalModel`).\n\nФайл (первый найденный побеждает):\n1. `$OLLAMA_EXTERNAL_SYSTEM_PROMPT` — если задан, другие пути не смотрятся;\n2. `external_system_prompt.md` в каталоге конфигурации провайдеров;\n3. `system_prompt.md` там же (алиас).\n\nКаталог конфигурации (`externalPromptConfigDir`, `server/external_prompt.go:61`):\n`dirname($OLLAMA_PROVIDERS_CONFIG)` → `$OLLAMA_HOME` → `~/.ollama`.\nТ.е. промпт лежит рядом с `providers.json`: `/home/voron/.ollama/external_system_prompt.md`.\n\nДве точки инъекции:\n- `buildOpenAIRequest` — промпт вставляется первым сообщением `role: system`\n  (`prependExternalSystemPrompt`, `server/external_prompt.go:152`); если клиент уже\n  прислал system с этим текстом — не дублируется, если прислал свой system —\n  склеивается как `prompt + \"\\n\\n\" + свой`;\n- `ShowHandler` — внешняя модель отдаёт промпт в `ShowResponse.System`, поэтому TUI\n  включает его в запрос и показывает в `/system`.\n\nКэш: `mtime` + размер файла, правки подхватываются без рестарта демона.\nТесты: `server/external_prompt_test.go`, `cmd/tui/chat/input_test.go`\n(`TestChatSystemCommandControlsExternalSystemPrompt`).\n\n- [x] Промпт читается из файла рядом с `providers.json`\n- [x] Инъекция в исходящий OpenAI-запрос, без дублей\n- [x] `ollama show \u003cexternal\u003e` печатает блок `System`\n- [x] `/system off` в TUI убирает промпт и для внешних моделей\n- [ ] Живая проверка `/system off` в TUI на реальном провайдере (проверено кодом + тестом)\n\n## Риски / открытые вопросы",
+                  "old_text": "## Риски / открытые вопросы"
+                },
+                {
+                  "new_text": "- Логирование ключа: не писать key в логи (`OLLAMA_DEBUG_LOG_REQUESTS` — маскировать).\n- Промпт общий для всех внешних провайдеров; per-provider override пока не сделан\n  (при необходимости — `external_system_prompt.\u003cprovider\u003e.md`).",
+                  "old_text": "- Логирование ключа: не писать key в логи (`OLLAMA_DEBUG_LOG_REQUESTS` — маскировать)."
+                }
+              ],
+              "path": "/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork/PLAN-external-api.md"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Updated /home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork/PLAN-external-api.md (2 edits, 2 replacements).",
+      "tool_name": "edit",
+      "tool_call_id": "call_00_lnxilodi7dcpi2j9xkisgqwc"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Let me verify line numbers referenced in the doc are accurate: external_prompt.go:61 externalPromptConfigDir — yes, line 61. prependExternalSystemPrompt at line 152 — yes.\n\nAlso update the checkboxes at the top stages? Etap 0-4 are all unchecked but implementation is done. Maybe mark completed items. Let me be careful—better to reflect reality. Stages 0–4 appear done in practice. Let me check quickly what's implemented (config file providers.json, /model picker). Plausibly done. I'll mark stages as done with a note, but I should verify. Let me check quickly for provider list in TUI and config file loading.",
+      "tool_calls": [
+        {
+          "id": "call_00_anfnn544d3l7snrlylmws6bx",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -rn \"providerConfigPaths\\|providersEnvName\" --include=*.go server cmd | grep -v _test | cut -c1-120"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "server/external_prompt.go:54:// externalPromptConfigDir mirrors providerConfigPaths' config directory logic.\nserver/external_prompt.go:62:\tif explicit := strings.TrimSpace(os.Getenv(providersEnvName)); explicit != \"\" {\nserver/providers.go:32:// providersEnvName is an optional explicit path to the providers config file.\nserver/providers.go:35:const providersEnvName = \"OLLAMA_PROVIDERS_CONFIG\"\nserver/providers.go:37:// providerConfigPaths returns the candidate config paths in priority order:\nserver/providers.go:40:func providerConfigPaths() []string {\nserver/providers.go:58:\tif explicit := strings.TrimSpace(os.Getenv(providersEnvName)); explicit != \"\" {\nserver/providers.go:80:\tpaths := providerConfigPaths()\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_anfnn544d3l7snrlylmws6bx"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_fsz95gj681hmxakaogcd5tci",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 gofmt -l server cmd api \u0026\u0026 go vet ./server/ ./cmd/tui/chat/ 2\u003e\u00261 | tail -3 \u0026\u0026 go test ./server/ ./cmd/tui/chat/ -count=1 2\u003e\u00261 | tail -5"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "cmd/ggufdump/main.go\ncmd/tui/chat/chat.go\ncmd/tui/chat/input_test.go\ncmd/tui/chat/render.go\n2026/10/26 22:02:02 WARN ghost-message guard: injecting placeholder user message (no real query after compaction)\n2026/10/26 22:02:02 WARN ghost-message guard: injecting placeholder user message (no real query after compaction)\nFAIL\nFAIL\tgithub.com/ollama/ollama/cmd/tui/chat\t0.291s\nFAIL\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_fsz95gj681hmxakaogcd5tci"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "gofmt lists files not formatted — but check whether those were already unformatted before my edit (chat.go, render.go, ggufdump). Let me check my test file formatting and the failure.",
+      "tool_calls": [
+        {
+          "id": "call_00_ya5jqf01bpz6d107ckrjkfrl",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 go test ./cmd/tui/chat/ -count=1 2\u003e\u00261 | grep -E \"^(---|\\s+---|FAIL|ok)\" | head -20"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\nFAIL\nFAIL\tgithub.com/ollama/ollama/cmd/tui/chat\t0.283s\nFAIL\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_ya5jqf01bpz6d107ckrjkfrl"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Is that failure pre-existing? Let's check by stashing? Better: run that test on HEAD version. Let's check git stash or use git stash push of input_test.go only. Let's look at the test first.",
+      "tool_calls": [
+        {
+          "id": "call_00_ul9a46iu9wwhj1wkspw6l55y",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 go test ./cmd/tui/chat/ -run TestChatMessageSubmitWhileRunningPreservesDraft -count=1 2\u003e\u00261 | tail -20"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "[version] WARNING: стоит встроенная fallback-версия 0.40.6-voron\n[version]         похоже, собирали БЕЗ ldflags -X .../version.Version=...\n[version]         именование и сборка — VORON-RUNBOOK.md §3:\n[version]         go build -ldflags \"-X github.com/ollama/ollama/version.Version=0.40.6-$(date +%d%m%Y)\" .\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n    input_test.go:1436: pendingPrompts = []string{\"next prompt [image 1] long paste\"}, want message queued\nFAIL\nFAIL\tgithub.com/ollama/ollama/cmd/tui/chat\t0.006s\nFAIL\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_ul9a46iu9wwhj1wkspw6l55y"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "This test failure is pre-existing? Let's check with git stash or check if it fails on HEAD. It might be flaky/timing. Let's run a few times.",
+      "tool_calls": [
+        {
+          "id": "call_00_mwbrtjb8kfjc4w22m40tgus5",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 go test ./cmd/tui/chat/ -run TestChatMessageSubmitWhileRunningPreservesDraft -count=5 2\u003e\u00261 | grep -E \"FAIL|ok\" | head; echo \"=== on HEAD version ===\"; git stash -q -u \u0026\u0026 go test ./cmd/tui/chat/ -run TestChatMessageSubmitWhileRunningPreservesDraft -count=3 2\u003e\u00261 | grep -E \"FAIL|ok\" | head; git stash pop -q; git status --short"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\nFAIL\nFAIL\tgithub.com/ollama/ollama/cmd/tui/chat\t0.007s\nFAIL\n=== on HEAD version ===\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\n--- FAIL: TestChatMessageSubmitWhileRunningPreservesDraft (0.00s)\nFAIL\nFAIL\tgithub.com/ollama/ollama/cmd/tui/chat\t0.006s\nFAIL\n M PLAN-external-api.md\n M cmd/tui/chat/input_test.go\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_mwbrtjb8kfjc4w22m40tgus5"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "This failure is pre-existing on HEAD (before my changes). Verify by checking whether it fails at commit 050986b5 too... HEAD is now my commit 49a0fb12 which doesn't touch chat code. So it's pre-existing. Should I fix it? It's unrelated but a failing test in the package is bad. Let me look at it briefly.\n\nActually wait — earlier summary said \"cmd tests pass\". So this failure is new-ish? Let's check git log to see if some commit broke it. Let me examine the test.",
+      "tool_calls": [
+        {
+          "id": "call_00_jl3h139qv69168269agvmtqw",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 1400,1445p cmd/tui/chat/input_test.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "\t\t}\n\t})\n}\n\nfunc TestChatSlashCommandsRunWhileModelResponds(t *testing.T) {\n\tm := chatModel{running: true, input: []rune(\"/help\")}\n\n\tupdated, cmd := m.handleSubmit()\n\tif cmd != nil {\n\t\tt.Fatal(\"help command should not return a command\")\n\t}\n\tm = updated.(chatModel)\n\tif len(m.entries) != 1 || m.entries[0].role != \"slash\" {\n\t\tt.Fatalf(\"entries = %#v, want immediate slash output\", m.entries)\n\t}\n}\n\nfunc TestChatMessageSubmitWhileRunningPreservesDraft(t *testing.T) {\n\tattachment := chatInputAttachment{placeholder: \"[image 1]\", kind: \"image\"}\n\tpasted := chatInputPastedText{placeholder: \"[pasted 1]\", content: \"long paste\"}\n\tm := chatModel{\n\t\trunning:          true,\n\t\tinput:            []rune(\"next prompt [image 1] [pasted 1]\"),\n\t\tinputCursor:      4,\n\t\tinputCursorSet:   true,\n\t\tinputAttachments: []chatInputAttachment{attachment},\n\t\tinputPastedTexts: []chatInputPastedText{pasted},\n\t}\n\n\tupdated, cmd := m.handleSubmit()\n\tif cmd != nil {\n\t\tt.Fatal(\"busy submit should not start a command\")\n\t}\n\tm = updated.(chatModel)\n\t// Message is queued while running; input is cleared.\n\tif len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != \"next prompt [image 1] [pasted 1]\" {\n\t\tt.Fatalf(\"pendingPrompts = %#v, want message queued\", m.pendingPrompts)\n\t}\n\tif got := string(m.input); got != \"\" {\n\t\tt.Fatalf(\"input should be cleared after queuing, got %q\", got)\n\t}\n\tif len(m.entries) != 0 {\n\t\tt.Fatalf(\"busy submit should not add entries: %#v\", m.entries)\n\t}\n}\n\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_jl3h139qv69168269agvmtqw"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "This test fails on HEAD too — pre-existing failure, not caused by us. Let me check why: pendingPrompts gets \"next prompt [image 1] long paste\"? The failure message said pendingPrompts = []string{\"next prompt [image 1] long paste\"}. So pasted text is expanded. Pre-existing broken test in this fork. Let me check git log for that test... It's pre-existing; I'll note it but not necessarily fix. Actually maybe I should check if it's a locally-modified test that expects old behavior. Let's see if the fork changed handleSubmit semantics.\n\nLet me quickly check the current behavior: pendingPrompts contains expanded text \"next prompt [image 1] long paste\" — i.e., pasted text expanded but image placeholder kept. Test expects placeholders preserved. Which is correct? Let's look at how queued prompts are re-submitted (queuedMessagePrefix).\n\nMinor; it's pre-existing. I'll report it rather than silently changing tests. But better: verify with `git log -1 --format=%h -- cmd/tui/chat/input_test.go` and `git diff HEAD~...`. Let's just check whether this test ever passed — check git log for the test introduction.",
+      "tool_calls": [
+        {
+          "id": "call_00_mlf0bcelksiu79zwuodiv5pb",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 git log --oneline -3 -S \"TestChatMessageSubmitWhileRunningPreservesDraft\" -- cmd/tui/chat/input_test.go | cut -c1-80"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "82f905cd cmd: agent UI (#17017)\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_mlf0bcelksiu79zwuodiv5pb"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "So this test failure is pre-existing on HEAD (upstream-like), not caused by my changes. Let me check why it fails — probably because the message queues with expanded attachments differently. Let me look at handleSubmit when running.\n\nActually it's a pre-existing failure in the fork; only my new test matters. But it's worth noting. Let me check quickly the actual pendingPrompts value.",
+      "tool_calls": [
+        {
+          "id": "call_00_0ux05cpuvrszzfdl995ji25f",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 sed -n 270,305p cmd/tui/chat/input.go"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "\t\tcmd := tea.Tick(m.heartbeatInterval, func(time.Time) tea.Msg { return heartbeatTickMsg{} })\n\t\tif prevMsg == \"\" {\n\t\t\tm.entries = append(m.entries, newChatEntry(chatEntry{role: \"info\", content: fmt.Sprintf(\"Heartbeat запущен: %q каждые %d с\", msg, int(m.heartbeatInterval.Seconds()))}))\n\t\t} else {\n\t\t\tm.entries = append(m.entries, newChatEntry(chatEntry{role: \"info\", content: fmt.Sprintf(\"Heartbeat обновлён: %q каждые %d с\", msg, int(m.heartbeatInterval.Seconds()))}))\n\t\t}\n\t\treturn *m, cmd\n\tcase command == \"/token\":\n\t\treturn m.handleTokenToggleCommand(args)\n\tcase command == \"/fullthink\":\n\t\tm.toggleInlineTranscriptDetails()\n\t\treturn *m, nil\n\tcase command == \"/prompt\":\n\t\treturn m.handlePromptCommand(args)\n\tcase command == \"/save\":\n\t\treturn m.handleSaveCommand(args)\n\tcase command == \"/new\" \u0026\u0026 args == \"\":\n\t\treturn m.resetChat(\"new chat\")\n\tcase command == \"/compact\" \u0026\u0026 args == \"\":\n\t\treturn m.startManualCompaction()\n\tcase skillOK:\n\t\treturn m.startSkillRun(skillName, skillPrompt)\n\tcase strings.HasPrefix(input, \"/\") \u0026\u0026 m.slashInputIsMultimodalFile(input):\n\t\treturn m.startRun(input)\n\tcase strings.HasPrefix(input, \"/\"):\n\t\tm.entries = append(m.entries, newChatEntry(chatEntry{role: \"error\", content: fmt.Sprintf(\"Unknown command %q\", strings.Fields(input)[0])}))\n\t\treturn *m, nil\n\t}\n\n\treturn m.startRun(input)\n}\n\nfunc (m *chatModel) handleSkillsCommand(args string) (tea.Model, tea.Cmd) {\n\tif fields := strings.Fields(args); len(fields) == 2 \u0026\u0026 fields[0] == \"import\" {\n\t\treturn m.handleSkillsImport(fields[1])\n\t} else if len(fields) == 2 \u0026\u0026 fields[0] == \"remove\" {\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_0ux05cpuvrszzfdl995ji25f"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "thinking": "This test failure is pre-existing (on HEAD too) — likely a known flaky/broken test in this fork. Let's check what handleSubmit does when running.",
+      "tool_calls": [
+        {
+          "id": "call_00_p1znnbsequl3inzcoxvlrbwx",
+          "function": {
+            "index": 0,
+            "name": "bash",
+            "arguments": {
+              "command": "cd \"/home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork\" \u0026\u0026 grep -n \"func (m \\*chatModel) handleSubmit\" -A 40 cmd/tui/chat/input.go | cut -c1-120"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "105:func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {\n106-\tm.syncInputPlaceholders()\n107-\tinput := strings.TrimSpace(string(m.input))\n108-\tif input == \"\" {\n109-\t\treturn *m, nil\n110-\t}\n111-\t_, _, hasSlashCommand := slashCommandInvocation(input)\n112-\tif (m.running || m.compacting) \u0026\u0026 !hasSlashCommand {\n113-\t\t// [voron] Расширяем плейсхолдеры вставок до постановки в очередь:\n114-\t\t// к моменту отправки inputPastedTexts уже будет очищен, и дословный\n115-\t\t// \"[Pasted text #N +L lines]\" улетит модели.\n116-\t\tm.pendingPrompts = append(m.pendingPrompts, m.expandPastedTextPlaceholders(input))\n117-\t\tm.status = fmt.Sprintf(\"queued (%d)\", len(m.pendingPrompts))\n118-\t\tm.input = nil\n119-\t\tm.inputCursor = 0\n120-\t\tm.inputCursorSet = false\n121-\t\tm.autoSendDirty = false\n122-\t\treturn *m, nil\n123-\t}\n124-\n125-\tattachments := cloneInputAttachments(m.inputAttachments)\n126-\tpastedTexts := cloneInputPastedTexts(m.inputPastedTexts)\n127-\tm.input = nil\n128-\tm.inputCursor = 0\n129-\tm.inputCursorSet = false\n130-\tm.autoSendDirty = false\n131-\tm.inputAttachments = attachments\n132-\tm.inputPastedTexts = pastedTexts\n133-\tm.complete = 0\n134-\tm.resetPromptHistoryCursor()\n135-\treturn m.submitInput(input)\n136-}\n137-\n138-func (m *chatModel) applySlashCompletion() bool {\n139-\trawInput := string(m.input)\n140-\tinput := strings.TrimSpace(rawInput)\n141-\tif !strings.HasPrefix(input, \"/\") {\n142-\t\treturn false\n143-\t}\n144-\tif _, _, known := slashCommandInvocation(input); known \u0026\u0026 !hasSystemCommandArgument(rawInput) {\n145-\t\treturn false\n",
+      "tool_name": "bash",
+      "tool_call_id": "call_00_p1znnbsequl3inzcoxvlrbwx"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "bash",
+        "description": "Execute a bash command on the system. Use this to inspect files, run tests, and perform development tasks.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The bash command to execute."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "bash_long",
+        "description": "Run a shell command with a configurable LONG timeout. Identical to the bash tool but accepts an optional 'timeout' argument in seconds (30-1800; default 600). Pick a timeout matched to how long the command is expected to take — do NOT default to the maximum: use short values for quick waits, longer only when genuinely needed (GPU training, big downloads, full builds). The result returns as soon as the command finishes; the timeout is an upper bound, not a fixed wait. Returns combined output and the final working directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The command to execute."
+            },
+            "timeout": {
+              "type": "integer",
+              "description": "Optional upper bound in seconds (30-1800, default 600). Set it to the expected duration of the command; do not blindly use the maximum."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit",
+        "description": "Edit a file by exact-text replacement.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "path",
+            "edits"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative, absolute, or with ~)."
+            },
+            "edits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "old_text": {
+                    "type": "string",
+                    "description": "Exact text to replace."
+                  },
+                  "new_text": {
+                    "type": "string",
+                    "description": "Replacement text."
+                  }
+                },
+                "required": [
+                  "old_text",
+                  "new_text"
+                ]
+              },
+              "description": "Edits matched against the original file. Each old_text must be unique; keep it minimal."
+            },
+            "replace_all": {
+              "type": "boolean",
+              "description": "Replace every occurrence (single edit only)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read",
+        "description": "Read a text file from the current working directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative, absolute, or with ~)."
+            },
+            "start": {
+              "type": "integer",
+              "description": "Optional 1-based line to start from."
+            },
+            "end": {
+              "type": "integer",
+              "description": "Optional inclusive end line."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "skill",
+        "description": "Load a named Ollama skill and return its instructions.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the skill to load."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_fetch",
+        "description": "Fetch and extract text content from a web page.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The URL to fetch and extract content from."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web for current information that may not be in the model's training data.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "query"
+          ],
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query to look up on the web."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write",
+        "description": "Create or overwrite a file with the given content.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "path",
+            "content"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative, absolute, or with ~)."
+            },
+            "content": {
+              "type": "string",
+              "description": "Full file content."
+            }
+          }
+        }
+      }
+    }
+  ],
+  "options": {}
+}

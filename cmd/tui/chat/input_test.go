@@ -1205,6 +1205,68 @@ func TestChatSystemCommandControlsBuiltInSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestChatSystemCommandControlsExternalSystemPrompt(t *testing.T) {
+	const externalPrompt = "universal external provider prompt"
+	client := &chatCaptureClient{}
+	m := chatModel{
+		ctx:   context.Background(),
+		input: []rune("/system off"),
+		opts: Options{
+			Model:  "proxyapi/deepseek/deepseek-v4.1-flash-1017",
+			Client: client,
+			SystemPromptForModel: func(_ context.Context, _ string, _ *coreagent.Registry, _ bool) string {
+				return externalPrompt
+			},
+		},
+	}
+
+	m.opts.SystemPrompt = externalPrompt
+	updated, _ := m.handleSubmit()
+	m = updated.(chatModel)
+	if !m.systemPromptDisabled {
+		t.Fatal("/system off should disable the external prompt")
+	}
+
+	updated, cmd := m.startRun("hello")
+	if cmd == nil {
+		t.Fatal("run after /system off should start")
+	}
+	m = updated.(chatModel)
+	if done := waitForRunDone(t, m.events); done.err != nil {
+		t.Fatalf("run after /system off: %v", done.err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("client requests = %d, want 1", len(client.requests))
+	}
+	for _, msg := range client.requests[0].Messages {
+		if msg.Role == "system" || strings.Contains(msg.Content, externalPrompt) {
+			t.Fatalf("/system off leaked external prompt: %#v", client.requests[0].Messages)
+		}
+	}
+
+	m.input = []rune("/system on")
+	updated, _ = m.handleSubmit()
+	m = updated.(chatModel)
+	if m.systemPromptDisabled {
+		t.Fatal("/system on should re-enable the external prompt")
+	}
+	updated, cmd = m.startRun("hello again")
+	if cmd == nil {
+		t.Fatal("run after /system on should start")
+	}
+	m = updated.(chatModel)
+	if done := waitForRunDone(t, m.events); done.err != nil {
+		t.Fatalf("run after /system on: %v", done.err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("client requests = %d, want 2", len(client.requests))
+	}
+	msgs := client.requests[1].Messages
+	if len(msgs) == 0 || msgs[0].Role != "system" || !strings.Contains(msgs[0].Content, externalPrompt) {
+		t.Fatalf("request after /system on = %#v", msgs)
+	}
+}
+
 func TestChatSystemCommandArgumentCompletions(t *testing.T) {
 	for _, tt := range []struct {
 		input string
@@ -1369,8 +1431,8 @@ func TestChatMessageSubmitWhileRunningPreservesDraft(t *testing.T) {
 		t.Fatal("busy submit should not start a command")
 	}
 	m = updated.(chatModel)
-	// Message is queued while running; input is cleared.
-	if len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "next prompt [image 1] [pasted 1]" {
+	// Message is queued while running with paste placeholders expanded; input is cleared.
+	if len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "next prompt [image 1] long paste" {
 		t.Fatalf("pendingPrompts = %#v, want message queued", m.pendingPrompts)
 	}
 	if got := string(m.input); got != "" {

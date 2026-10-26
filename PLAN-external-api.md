@@ -47,7 +47,42 @@
 - [ ] Локальные модели не затрагиваются (regression-проверка /api/chat локально).
 - [ ] Без ключа/endpoint — поведение как сейчас (ничего не ломается).
 
+## Этап 5 — Универсальный системный промпт для внешних моделей (сделано 2026-10-26)
+
+Промпт применяется **только** к моделям вида `provider/vendor/model`; локальные
+модели не затрагиваются ни на одном пути (см. `server/external_proxy.go`,
+ветка `tryParseExternalModel`).
+
+Файл (первый найденный побеждает):
+1. `$OLLAMA_EXTERNAL_SYSTEM_PROMPT` — если задан, другие пути не смотрятся;
+2. `external_system_prompt.md` в каталоге конфигурации провайдеров;
+3. `system_prompt.md` там же (алиас).
+
+Каталог конфигурации (`externalPromptConfigDir`, `server/external_prompt.go:61`):
+`dirname($OLLAMA_PROVIDERS_CONFIG)` → `$OLLAMA_HOME` → `~/.ollama`.
+Т.е. промпт лежит рядом с `providers.json`: `/home/voron/.ollama/external_system_prompt.md`.
+
+Две точки инъекции:
+- `buildOpenAIRequest` — промпт вставляется первым сообщением `role: system`
+  (`prependExternalSystemPrompt`, `server/external_prompt.go:152`); если клиент уже
+  прислал system с этим текстом — не дублируется, если прислал свой system —
+  склеивается как `prompt + "\n\n" + свой`;
+- `ShowHandler` — внешняя модель отдаёт промпт в `ShowResponse.System`, поэтому TUI
+  включает его в запрос и показывает в `/system`.
+
+Кэш: `mtime` + размер файла, правки подхватываются без рестарта демона.
+Тесты: `server/external_prompt_test.go`, `cmd/tui/chat/input_test.go`
+(`TestChatSystemCommandControlsExternalSystemPrompt`).
+
+- [x] Промпт читается из файла рядом с `providers.json`
+- [x] Инъекция в исходящий OpenAI-запрос, без дублей
+- [x] `ollama show <external>` печатает блок `System`
+- [x] `/system off` в TUI убирает промпт и для внешних моделей
+- [ ] Живая проверка `/system off` в TUI на реальном провайдере (проверено кодом + тестом)
+
 ## Риски / открытые вопросы
 - Конфликт суффиксов с `:cloud`/`:local` в modelref — выбрать синтаксис.
 - Разные форматы стрима провайдеров (anthropic-style, responses API) — MVP только OpenAI SSE.
 - Логирование ключа: не писать key в логи (`OLLAMA_DEBUG_LOG_REQUESTS` — маскировать).
+- Промпт общий для всех внешних провайдеров; per-provider override пока не сделан
+  (при необходимости — `external_system_prompt.<provider>.md`).
