@@ -109,6 +109,28 @@ sudo mv /tmp/ollama-patched /usr/local/bin/ollama   # mv, не cp!
   (архив с нужной версией, из него — `libggml-*.so`, cuda-библиотеки, `ggml-rpc-server`).
 - После копирования бинарник ollama подхватит новые .so при следующем старте процесса.
 
+### Провайдеры (external API) и путь к providers.json:
+- Порядок поиска в `server/providers.go` → `providerConfigPaths()`:
+  1. `$OLLAMA_PROVIDERS_CONFIG` (явный путь)
+  2. `$OLLAMA_HOME/providers.json` (иначе `~/.ollama/providers.json`)
+  3. `/etc/ollama/providers.json` (фолбэк)
+- Сервис работает под `User=ollama` (uid 997, home `/usr/share/ollama`), поэтому
+  путь из `/home/voron` требует ACL (drop-in уже стоит):
+  `/etc/systemd/system/ollama.service.d/providers.conf` →
+  `Environment="OLLAMA_PROVIDERS_CONFIG=/home/voron/.ollama/providers.json"`
+```bash
+sudo setfacl -m u:ollama:x /home/voron          # проход в каталог
+sudo setfacl -m u:ollama:rx /home/voron/.ollama  # листинг + чтение
+sudo setfacl -m u:ollama:r /home/voron/.ollama/providers.json
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+sudo journalctl -u ollama -n 50 | grep -i providers
+# ожидаем: providers: config loaded path=/home/voron/.ollama/providers.json
+#          providers: loaded external provider name=proxyapi models=2
+```
+- `~/.ollama/providers.json` — обычный файл (не симлинк), права `640`/`600` + ACL для `ollama`;
+  `/etc/ollama/providers.json` остаётся независимой копией-фолбэком.
+- Проверка моделей: `curl -s http://127.0.0.1:11434/api/tags | grep proxyapi`.
+
 ### Примечания:
 - Shift+Delete в bubbletea v1.3.10 неотличим от Delete (нет парсинга CSI modifier) — поэтому очистка через /очисточередь.
 - Кириллицу в бинарнике проверять grep, не strings.

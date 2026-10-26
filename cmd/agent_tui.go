@@ -453,7 +453,9 @@ func preloadAgentModelIfLocal(ctx context.Context, client *api.Client, opts agen
 	}
 	info, err := client.Show(ctx, &api.ShowRequest{Model: modelName})
 	if err != nil {
-		return 0, err
+		// [voron] unknown model (e.g. external API provider) — nothing to
+		// preload locally; the chat middleware routes it upstream.
+		return 0, nil
 	}
 	if info.RemoteHost != "" {
 		return 0, nil

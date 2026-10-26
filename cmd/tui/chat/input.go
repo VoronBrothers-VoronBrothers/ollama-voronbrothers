@@ -110,7 +110,10 @@ func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 	_, _, hasSlashCommand := slashCommandInvocation(input)
 	if (m.running || m.compacting) && !hasSlashCommand {
-		m.pendingPrompts = append(m.pendingPrompts, input)
+		// [voron] Расширяем плейсхолдеры вставок до постановки в очередь:
+		// к моменту отправки inputPastedTexts уже будет очищен, и дословный
+		// "[Pasted text #N +L lines]" улетит модели.
+		m.pendingPrompts = append(m.pendingPrompts, m.expandPastedTextPlaceholders(input))
 		m.status = fmt.Sprintf("queued (%d)", len(m.pendingPrompts))
 		m.input = nil
 		m.inputCursor = 0

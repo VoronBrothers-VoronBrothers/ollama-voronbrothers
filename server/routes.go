@@ -1764,6 +1764,18 @@ func (s *Server) ShowHandler(c *gin.Context) {
 	}
 	requestedModel := req.Model
 
+	// [voron] external API provider models ("provider/vendor/model"): answer
+	// Show directly with a remote host, so the TUI doesn't treat them as
+	// missing local models and offer to "pull" them from a registry.
+	if ext, ok := tryParseExternalModel(requestedModel); ok {
+		c.JSON(http.StatusOK, api.ShowResponse{
+			RemoteHost:   ext.Provider.BaseURL,
+			Capabilities: []model.Capability{model.CapabilityTools}, // [voron] function calling через прокси
+			Details:      api.ModelDetails{Family: "external", ParameterSize: "external"},
+		})
+		return
+	}
+
 	modelRef, err := parseAndValidateModelRef(req.Model)
 	if err != nil {
 		writeModelRefParseError(c, err, http.StatusBadRequest, err.Error())
@@ -2134,6 +2146,10 @@ func (s *Server) ListHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// [voron] external API provider models: append them to /api/tags so the
+	// TUI model picker and `ollama list` show them alongside local models.
+	models = append(models, externalListModelResponses()...)
 
 	c.JSON(http.StatusOK, api.ListResponse{Models: models})
 }

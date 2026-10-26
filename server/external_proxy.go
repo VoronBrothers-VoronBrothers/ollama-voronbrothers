@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,42 +50,77 @@ func externalProxyMiddleware() gin.HandlerFunc {
 
 // openaiChatRequest is the minimal OpenAI chat/completions request structure.
 type openaiChatRequest struct {
-	Model    string           `json:"model"`
-	Messages []openaiMessage  `json:"messages"`
-	Stream   bool             `json:"stream"`
-	MaxTokens *int            `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []openaiMessage `json:"messages"`
+	Stream      bool            `json:"stream"`
+	Tools       []openaiTool    `json:"tools,omitempty"` // [voron] function calling
+	MaxTokens   *int            `json:"max_tokens,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+}
+
+// openaiTool mirrors OpenAI's tool definition (Ollama sends the same shape).
+type openaiTool struct {
+	Type     string          `json:"type"`
+	Function json.RawMessage `json:"function"`
+}
+
+type openaiInCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 type openaiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content"`
+	Name       string          `json:"name,omitempty"` // [voron] tool results (role=tool)
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolCalls  []openaiOutCall `json:"tool_calls,omitempty"` // [voron] assistant tool calls
+}
+
+type openaiOutCall struct {
+	ID       string         `json:"id,omitempty"`
+	Type     string         `json:"type"`
+	Function map[string]any `json:"function"`
 }
 
 // ollamaChatResponse is the Ollama /api/chat streaming response format (one per line).
 type ollamaChatResponse struct {
-	Model      string            `json:"model"`
-	CreatedAt  time.Time         `json:"created_at"`
-	Message    ollamaRespMessage `json:"message"`
-	Done       bool              `json:"done"`
-	DoneReason string            `json:"done_reason,omitempty"`
-	TotalDuration time.Duration   `json:"total_duration,omitempty"`
-	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
-	EvalCount     int             `json:"eval_count,omitempty"`
-	EvalDuration  time.Duration   `json:"eval_duration,omitempty"`
+	Model           string            `json:"model"`
+	CreatedAt       time.Time         `json:"created_at"`
+	Message         ollamaRespMessage `json:"message"`
+	Done            bool              `json:"done"`
+	DoneReason      string            `json:"done_reason,omitempty"`
+	TotalDuration   time.Duration     `json:"total_duration,omitempty"`
+	PromptEvalCount int               `json:"prompt_eval_count,omitempty"`
+	EvalCount       int               `json:"eval_count,omitempty"`
+	EvalDuration    time.Duration     `json:"eval_duration,omitempty"`
 }
 
 type ollamaRespMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string          `json:"role"`
+	Content   string          `json:"content"`
+	Thinking  string          `json:"thinking,omitempty"`   // [voron] рассуждения модели (reasoning)
+	ToolCalls []ollamaOutCall `json:"tool_calls,omitempty"` // [voron] tool calling
+}
+
+type ollamaOutCall struct {
+	ID       string         `json:"id,omitempty"`
+	Function map[string]any `json:"function"`
 }
 
 // openaiSSEChunk is a single SSE data payload from OpenAI streaming.
 type openaiSSEChunk struct {
 	Choices []struct {
 		Delta struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role             string         `json:"role"`
+			Content          string         `json:"content"`
+			ReasoningContent string         `json:"reasoning_content,omitempty"` // [voron] deepseek/qwen thinking
+			ToolCalls        []openaiInCall `json:"tool_calls"`                  // [voron] tool calling
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -139,10 +175,12 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	var (
-		evalCount       int
-		promptTokens    int
-		finishReason    string
+		evalCount    int
+		promptTokens int
+		finishReason string
+		toolAcc      map[int]*openaiInCall // [voron] накопленные tool_calls по индексу
 	)
+	toolAcc = make(map[int]*openaiInCall)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -167,11 +205,24 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 			continue
 		}
 
-		// Extract content delta
-		var content string
+		// Extract content delta (+ reasoning, if the provider sends it)
+		var content, thinking string
 		for _, choice := range chunk.Choices {
+			if choice.Delta.ReasoningContent != "" {
+				thinking += choice.Delta.ReasoningContent
+			}
 			if choice.Delta.Content != "" {
 				content = choice.Delta.Content
+			}
+			for _, tc := range choice.Delta.ToolCalls { // [voron] tool calling
+				frag, ok := toolAcc[tc.Index]
+				if !ok {
+					frag = &openaiInCall{}
+					toolAcc[tc.Index] = frag
+				}
+				frag.ID += tc.ID
+				frag.Function.Name += tc.Function.Name
+				frag.Function.Arguments += tc.Function.Arguments
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				finishReason = *choice.FinishReason
@@ -182,18 +233,18 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 			promptTokens = chunk.Usage.PromptTokens
 		}
 
-		if content == "" && finishReason == "" {
+		if content == "" && thinking == "" && finishReason == "" {
 			continue
 		}
 
 		// Emit Ollama-style response line
 		evalCount++
 		resp := ollamaChatResponse{
-			Model:      modelDisplay,
-			CreatedAt:  time.Now(),
-			Message:    ollamaRespMessage{Role: "assistant", Content: content},
-			Done:       finishReason != "",
-			EvalCount:  evalCount,
+			Model:     modelDisplay,
+			CreatedAt: time.Now(),
+			Message:   ollamaRespMessage{Role: "assistant", Content: content, Thinking: thinking},
+			Done:      finishReason != "",
+			EvalCount: evalCount,
 		}
 
 		if resp.Done {
@@ -201,6 +252,21 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 			resp.TotalDuration = time.Since(startTime).Round(time.Millisecond)
 			resp.PromptEvalCount = promptTokens
 			resp.EvalDuration = time.Since(startTime).Round(time.Millisecond)
+		}
+
+		// [voron] tool calls: отдельная строка перед done-чанком
+		if resp.Done && len(toolAcc) > 0 {
+			if tcLine, mErr := json.Marshal(ollamaChatResponse{
+				Model:     modelDisplay,
+				CreatedAt: time.Now(),
+				Message:   ollamaRespMessage{Role: "assistant", ToolCalls: buildToolCallsOut(toolAcc)},
+			}); mErr == nil {
+				c.Writer.Write(tcLine)
+				c.Writer.Write([]byte("\n"))
+				if canFlush {
+					flusher.Flush()
+				}
+			}
 		}
 
 		lineBytes, err := json.Marshal(resp)
@@ -223,16 +289,28 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 	}
 }
 
+// ollamaInMessage is the subset of api.Message we need for the conversion.
+type ollamaInMessage struct {
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	ToolName   string            `json:"tool_name,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
+	ToolCalls  []ollamaInOutCall `json:"tool_calls,omitempty"`
+}
+
+type ollamaInOutCall struct {
+	ID       string         `json:"id"`
+	Function map[string]any `json:"function"`
+}
+
 // buildOpenAIRequest converts an Ollama /api/chat body into OpenAI chat/completions format.
 func buildOpenAIRequest(extRef *externalModelRef, ollamaBody []byte) ([]byte, error) {
 	var req struct {
-		Model     string `json:"model"`
-		Messages  []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-		Stream      *bool   `json:"stream,omitempty"`
-		Options     map[string]any `json:"options,omitempty"`
+		Model    string            `json:"model"`
+		Messages []ollamaInMessage `json:"messages"`
+		Tools    []openaiTool      `json:"tools,omitempty"` // [voron] function calling
+		Stream   *bool             `json:"stream,omitempty"`
+		Options  map[string]any    `json:"options,omitempty"`
 	}
 	if err := json.Unmarshal(ollamaBody, &req); err != nil {
 		return nil, fmt.Errorf("parse request: %w", err)
@@ -244,11 +322,35 @@ func buildOpenAIRequest(extRef *externalModelRef, ollamaBody []byte) ([]byte, er
 		Stream:   true,
 	}
 
+	// [voron] tools passthrough (Ollama и OpenAI используют одинаковый формат)
+	openaiReq.Tools = req.Tools
+
 	for _, m := range req.Messages {
-		openaiReq.Messages = append(openaiReq.Messages, openaiMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+		out := openaiMessage{Role: m.Role, Content: m.Content}
+		if m.Role == "tool" {
+			out.ToolCallID = m.ToolCallID
+			out.Name = m.ToolName
+		}
+		for _, tc := range m.ToolCalls {
+			fn := make(map[string]any, len(tc.Function))
+			for k, v := range tc.Function {
+				fn[k] = v
+			}
+			// [voron] OpenAI требует arguments как JSON-строку в истории сообщений
+			if args, ok := fn["arguments"]; ok && args != nil {
+				if b, err := json.Marshal(args); err == nil {
+					fn["arguments"] = string(b)
+				} else {
+					fn["arguments"] = ""
+				}
+			}
+			out.ToolCalls = append(out.ToolCalls, openaiOutCall{
+				ID:       tc.ID,
+				Type:     "function",
+				Function: fn,
+			})
+		}
+		openaiReq.Messages = append(openaiReq.Messages, out)
 	}
 
 	// Pass through some options if present
@@ -276,4 +378,31 @@ func mapFinishReason(reason string) string {
 	default:
 		return "stop"
 	}
+}
+
+// buildToolCallsOut converts accumulated OpenAI tool-call fragments into the
+// Ollama api.ToolCall shape (arguments decoded to a map when possible).
+func buildToolCallsOut(acc map[int]*openaiInCall) []ollamaOutCall {
+	indices := make([]int, 0, len(acc))
+	for i := range acc {
+		indices = append(indices, i)
+	}
+	sort.Ints(indices)
+
+	out := make([]ollamaOutCall, 0, len(indices))
+	for _, i := range indices {
+		frag := acc[i]
+		argsAny := any(frag.Function.Arguments)
+		if frag.Function.Arguments != "" && frag.Function.Arguments != "null" {
+			var decoded any
+			if err := json.Unmarshal([]byte(frag.Function.Arguments), &decoded); err == nil {
+				argsAny = decoded
+			}
+		}
+		out = append(out, ollamaOutCall{
+			ID:       frag.ID,
+			Function: map[string]any{"name": frag.Function.Name, "arguments": argsAny},
+		})
+	}
+	return out
 }
