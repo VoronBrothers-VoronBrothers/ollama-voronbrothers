@@ -131,6 +131,16 @@ sudo journalctl -u ollama -n 50 | grep -i providers
   `/etc/ollama/providers.json` остаётся независимой копией-фолбэком.
 - Проверка моделей: `curl -s http://127.0.0.1:11434/api/tags | grep proxyapi`.
 
+### Системный промпт для внешних моделей:
+- Файл: `/home/voron/.ollama/external_system_prompt.md` (алиас `system_prompt.md` там же);
+  явный путь — `$OLLAMA_EXTERNAL_SYSTEM_PROMPT` (если задан, другие не смотрятся).
+- Каталог берётся из `dirname($OLLAMA_PROVIDERS_CONFIG)`, т.е. промпт ищется рядом
+  с `providers.json` — отдельный drop-in не нужен (`server/external_prompt.go`).
+- Применяется только к моделям `provider/vendor/model`; локальные не затрагиваются.
+- Правки подхватываются без рестарта (кэш по mtime + размеру).
+- Проверка: `ollama show proxyapi/qwen/qwen3.8-27b` → блок `System`.
+- `/system off` в TUI отключает промпт и для внешних моделей.
+
 ### Примечания:
 - Shift+Delete в bubbletea v1.3.10 неотличим от Delete (нет парсинга CSI modifier) — поэтому очистка через /очисточередь.
 - Кириллицу в бинарнике проверять grep, не strings.

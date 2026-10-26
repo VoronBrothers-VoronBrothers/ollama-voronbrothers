@@ -25,6 +25,90 @@
 Опционально: `skill` (если есть каталог скиллов), `web_search` / `web_fetch` и MCP-серверы.
 Отключение через переменные окружения, напр. `OLLAMA_AGENT_DISABLE_SHELL`, `OLLAMA_AGENT_DISABLE_WEBSEARCH`.
 
+### Внешние провайдеры (external API)
+
+Форк умеет проксировать модели внешних API-провайдеров через тот же `/api/chat`,
+что и локальные. Конфиг — обычный JSON рядом с остальными настройками Ollama:
+`~/.ollama/providers.json`.
+
+```json
+{
+  "providers": [
+    {
+      "name": "proxyapi",
+      "base_url": "https://api.proxyapi.ru/v1",
+      "api_key": "sk-...",
+      "models": ["qwen/qwen3.8-27b", "deepseek/deepseek-v4.1-flash-1017"]
+    }
+  ]
+}
+```
+
+- `name` — первый сегмент имени модели в API (`proxyapi/qwen/qwen3.8-27b`);
+  сравнивается без учёта регистра;
+- `base_url` — база OpenAI-совместимого API (хвостовой `/` отбрасывается);
+- `models` — список `vendor/model`, как их ждёт провайдер; именно эти имена
+  видны в `/api/tags` и в пикере `/model` с префиксом `<name>/`;
+- модели с префиксом провайдера уходят во внешний API, локальные — нет
+  (ветка `tryParseExternalModel` в `server/providers.go`).
+
+Порядок поиска файла (`providerConfigPaths()`, `server/providers.go`):
+1. `$OLLAMA_PROVIDERS_CONFIG` — если задан, **только** он (без фолбэков);
+2. `$OLLAMA_HOME/providers.json`, иначе `~/.ollama/providers.json`;
+3. `/etc/ollama/providers.json` — системный фолбэк.
+
+Демон работает под `User=ollama` с чужим `$HOME`, поэтому путь в `/home/<user>`
+требует drop-in с явным путём и ACL на каталог:
+
+```bash
+# /etc/systemd/system/ollama.service.d/providers.conf
+# [Service]
+# Environment="OLLAMA_PROVIDERS_CONFIG=/home/voron/.ollama/providers.json"
+
+sudo setfacl -m u:ollama:x  /home/voron
+sudo setfacl -m u:ollama:rx /home/voron/.ollama
+sudo setfacl -m u:ollama:r  /home/voron/.ollama/providers.json
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+
+sudo journalctl -u ollama -n 50 | grep -i providers
+# providers: config loaded path=/home/voron/.ollama/providers.json
+# providers: loaded external provider name=proxyapi models=2
+curl -s http://127.0.0.1:11434/api/tags | grep proxyapi
+```
+
+Файл держим обычным файлом (не симлинком) с правами `600`/`640`: ключи не должны
+быть доступны другим пользователям.
+
+### Системный промпт для внешних моделей
+
+Универсальный промпт применяется **только** к моделям внешних провайдеров;
+локальные модели не затрагиваются ни на одном пути.
+
+Файл (первый найденный побеждает):
+1. `$OLLAMA_EXTERNAL_SYSTEM_PROMPT` — если задан, другие пути не смотрятся;
+2. `external_system_prompt.md` в каталоге конфига провайдеров;
+3. `system_prompt.md` там же (алиас).
+
+Каталог конфига (`externalPromptConfigDir()`, `server/external_prompt.go`):
+`dirname($OLLAMA_PROVIDERS_CONFIG)` → `$OLLAMA_HOME` → `~/.ollama`.
+То есть промпт лежит рядом с `providers.json`: `/home/voron/.ollama/external_system_prompt.md`.
+
+```bash
+# правки подхватываются без рестарта демона (кэш по mtime + размеру)
+nano ~/.ollama/external_system_prompt.md
+ollama show proxyapi/qwen/qwen3.8-27b   # блок System
+```
+
+Куда попадает промпт:
+- `buildOpenAIRequest` — первым сообщением `role: system` в исходящем запросе;
+  если клиент уже прислал system с этим текстом — не дублируется, если прислал
+  свой system — склеивается как `промпт + "\n\n" + свой`;
+- `ShowHandler` — внешняя модель отдаёт промпт в `ShowResponse.System`, поэтому
+  TUI включает его в запрос и показывает в `/system`;
+- `/system off` в TUI отключает его и для внешних моделей.
+
+Промпт общий для всех провайдеров; per-provider override пока нет.
+
 ### Слэш-команды
 
 | Команда | Алиасы | Назначение |
