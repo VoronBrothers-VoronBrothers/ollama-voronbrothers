@@ -18,6 +18,36 @@ type ProviderConfig struct {
 	BaseURL string   `json:"base_url"`
 	APIKey  string   `json:"api_key"`
 	Models  []string `json:"models"`
+
+	// [voron] optional context window hints. External providers do not report
+	// a context window through a Show-like endpoint, so the TUI would fall back
+	// to 32768 tokens and compact far too early. Either set one default per
+	// provider ("context_window") or per model ("context_windows": {model: N}).
+	ContextWindow  int            `json:"context_window,omitempty"`
+	ContextWindows map[string]int `json:"context_windows,omitempty"`
+}
+
+// ContextWindowFor returns the configured context window for modelID, falling
+// back to the provider-wide value. Zero means "not configured".
+func (p *ProviderConfig) ContextWindowFor(modelID string) int {
+	if p == nil {
+		return 0
+	}
+	if len(p.ContextWindows) > 0 {
+		if n := p.ContextWindows[modelID]; n > 0 {
+			return n
+		}
+		// tolerate case differences between config and request
+		for name, n := range p.ContextWindows {
+			if n > 0 && strings.EqualFold(name, modelID) {
+				return n
+			}
+		}
+	}
+	if p.ContextWindow > 0 {
+		return p.ContextWindow
+	}
+	return 0
 }
 
 // providersFile is the location of the external providers configuration.
@@ -119,7 +149,15 @@ func loadProviders() {
 			slog.Warn("providers: skipping invalid provider entry", "name", p.Name)
 			continue
 		}
-		slog.Info("providers: loaded external provider", "name", p.Name, "models", len(p.Models))
+		if p.ContextWindow < 0 {
+			p.ContextWindow = 0
+		}
+		for name, n := range p.ContextWindows {
+			if n <= 0 {
+				delete(p.ContextWindows, name)
+			}
+		}
+		slog.Info("providers: loaded external provider", "name", p.Name, "models", len(p.Models), "context_window", p.ContextWindow, "context_windows", len(p.ContextWindows))
 	}
 
 	providersMu.Lock()

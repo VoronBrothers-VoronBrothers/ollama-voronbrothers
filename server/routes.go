@@ -1771,7 +1771,14 @@ func (s *Server) ShowHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, api.ShowResponse{
 			RemoteHost:   ext.Provider.BaseURL,
 			Capabilities: []model.Capability{model.CapabilityTools}, // [voron] function calling через прокси
-			Details:      api.ModelDetails{Family: "external", ParameterSize: "external"},
+			Details: api.ModelDetails{
+				Family:        "external",
+				ParameterSize: "external",
+				// [voron] context window hint from providers.json, so the TUI
+				// does not fall back to 32768 and compact external sessions
+				// prematurely. 0 = unknown, TUI keeps its own fallback.
+				ContextLength: ext.Provider.ContextWindowFor(ext.ModelID),
+			},
 			// [voron] universal prompt for external models: the TUIs build
 			// their system message from this field. It is NOT the model's own
 			// template system prompt (external models have none).
