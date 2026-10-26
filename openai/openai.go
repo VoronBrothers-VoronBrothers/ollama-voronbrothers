@@ -861,18 +861,34 @@ func decodeImageURL(url string) (api.ImageData, error) {
 }
 
 // FromCompletionToolCall converts OpenAI ToolCall format to api.ToolCall
+//
+// Arguments are decoded leniently: a client replaying an earlier assistant
+// turn whose arguments were truncated by the model must still get a usable
+// request. Unrecoverable payloads keep the tool call itself and are reported
+// with empty arguments plus a warning naming the tool, so the mistake is
+// visible without failing the whole conversation.
 func FromCompletionToolCall(toolCalls []ToolCall) ([]api.ToolCall, error) {
 	apiToolCalls := make([]api.ToolCall, len(toolCalls))
 	for i, tc := range toolCalls {
 		apiToolCalls[i].ID = tc.ID
 		apiToolCalls[i].Function.Name = tc.Function.Name
-		err := json.Unmarshal([]byte(tc.Function.Arguments), &apiToolCalls[i].Function.Arguments)
-		if err != nil {
-			return nil, errors.New("invalid tool call arguments")
+		args, ok := toolCallArguments(tc.Function.Arguments)
+		if !ok {
+			slog.Warn("could not decode tool call arguments, sending the call with empty arguments",
+				"tool", tc.Function.Name,
+				"tool_call_id", tc.ID,
+				"arguments", tc.Function.Arguments)
 		}
+		apiToolCalls[i].Function.Arguments = args
 	}
 
 	return apiToolCalls, nil
+}
+
+// toolCallArguments decodes raw arguments, tolerating the shapes models and
+// clients actually emit (double encoding, truncation, surrounding prose).
+func toolCallArguments(raw string) (api.ToolCallFunctionArguments, bool) {
+	return api.ToolCallArgumentsFromJSON([]byte(raw))
 }
 
 // FromCompleteRequest converts a CompletionRequest to api.GenerateRequest

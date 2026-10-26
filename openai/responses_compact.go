@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -512,11 +513,12 @@ func compactionMessage(item ResponsesInputItem) (api.Message, string, error) {
 		message, err := convertInputMessage(value)
 		return message, "message", err
 	case ResponsesFunctionCall:
-		var arguments api.ToolCallFunctionArguments
-		if value.Arguments != "" {
-			if err := json.Unmarshal([]byte(value.Arguments), &arguments); err != nil {
-				return api.Message{}, "", fmt.Errorf("invalid function arguments: %w", err)
-			}
+		arguments, ok := api.ToolCallArgumentsFromJSON([]byte(value.Arguments))
+		if !ok {
+			slog.Warn("could not decode function call arguments, sending the call with empty arguments",
+				"tool", value.Name,
+				"call_id", value.CallID,
+				"arguments", value.Arguments)
 		}
 		name := qualifyNamespaceToolName(value.Namespace, value.Name)
 		return api.Message{Role: "assistant", ToolCalls: []api.ToolCall{{

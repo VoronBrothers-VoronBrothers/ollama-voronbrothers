@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"strings"
 	"time"
@@ -672,11 +673,12 @@ func FromResponsesRequest(r ResponsesRequest, thinking ...*model.Thinking) (*api
 			messages = append(messages, msg)
 		case ResponsesFunctionCall:
 			// Convert function call to assistant message with tool calls
-			var args api.ToolCallFunctionArguments
-			if v.Arguments != "" {
-				if err := json.Unmarshal([]byte(v.Arguments), &args); err != nil {
-					return nil, fmt.Errorf("failed to parse function call arguments: %w", err)
-				}
+			args, ok := api.ToolCallArgumentsFromJSON([]byte(v.Arguments))
+			if !ok {
+				slog.Warn("could not decode function call arguments, sending the call with empty arguments",
+					"tool", v.Name,
+					"call_id", v.CallID,
+					"arguments", v.Arguments)
 			}
 			namespace, name := v.Namespace, v.Name
 			if namespace == "" {

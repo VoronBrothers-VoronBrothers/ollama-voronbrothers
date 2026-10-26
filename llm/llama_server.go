@@ -2258,11 +2258,16 @@ func accumulatedToolCalls(accs map[int]*llamaServerToolCallAccumulator) ([]api.T
 			continue
 		}
 
-		var args api.ToolCallFunctionArguments
-		if strings.TrimSpace(acc.arguments) != "" {
-			if err := json.Unmarshal([]byte(acc.arguments), &args); err != nil {
-				return nil, fmt.Errorf("llama-server returned invalid tool call arguments for %q: %w", acc.name, err)
-			}
+		// A model that truncated the JSON arguments should still produce a
+		// tool call. Dropping the whole response would leave the caller with
+		// nothing to retry, so decode leniently and surface the bad payload
+		// in the log instead.
+		args, ok := api.ToolCallArgumentsFromJSON([]byte(acc.arguments))
+		if !ok {
+			slog.Warn("llama-server returned undecodable tool call arguments, sending the call with empty arguments",
+				"tool", acc.name,
+				"tool_call_id", acc.id,
+				"arguments", acc.arguments)
 		}
 
 		toolCalls = append(toolCalls, api.ToolCall{

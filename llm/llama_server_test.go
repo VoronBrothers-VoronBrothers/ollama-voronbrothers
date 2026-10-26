@@ -3730,18 +3730,43 @@ func TestIsGPUBuffer(t *testing.T) {
 	}
 }
 
-func TestAccumulatedToolCallsRejectsInvalidArguments(t *testing.T) {
-	_, err := accumulatedToolCalls(map[int]*llamaServerToolCallAccumulator{
+func TestAccumulatedToolCallsToleratesInvalidArguments(t *testing.T) {
+	toolCalls, err := accumulatedToolCalls(map[int]*llamaServerToolCallAccumulator{
 		0: {
 			name:      "weather",
 			arguments: `{"city":`,
 		},
 	})
-	if err == nil {
-		t.Fatal("expected invalid tool call arguments to return an error")
+	if err != nil {
+		t.Fatalf("expected no error for undecodable arguments, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "weather") {
-		t.Fatalf("expected function name in error, got %v", err)
+	if len(toolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(toolCalls))
+	}
+	if toolCalls[0].Function.Name != "weather" {
+		t.Fatalf("got name %q, want weather", toolCalls[0].Function.Name)
+	}
+	if toolCalls[0].Function.Arguments.Len() != 0 {
+		t.Fatalf("expected empty arguments, got %s", toolCalls[0].Function.Arguments.String())
+	}
+}
+
+func TestAccumulatedToolCallsRepairsTruncatedArguments(t *testing.T) {
+	toolCalls, err := accumulatedToolCalls(map[int]*llamaServerToolCallAccumulator{
+		0: {
+			name:      "weather",
+			arguments: `{"city":"Par`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(toolCalls))
+	}
+	city, _ := toolCalls[0].Function.Arguments.Get("city")
+	if city != "Par" {
+		t.Fatalf("got city %v, want Par", city)
 	}
 }
 
