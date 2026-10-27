@@ -16,3 +16,6 @@ llama/build
 llama/vendor
 /ollama
 integration/testdata/models/
+
+# TUI `/save <name>.json` request dumps — written to cwd; keep out of git if saved in-repo
+[0-9]*.json
