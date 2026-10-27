@@ -1,4 +1,4 @@
-# Инструменты агента (bash/read/edit/skill) — где живут, как править и добавлять
+# Сборка/пересборка оллама/атомарная замена бинарника/инструменты/переменные окружения
 # инструкция 
 
 > Репозиторий: `/home/voron/Документы/VB-ollama/ollama` (upstream github.com/ollama/ollama, ветка на fb307609 + свои правки).
@@ -163,3 +163,80 @@ sudo journalctl -u ollama -n 50 | grep -i providers
 ### Примечания:
 - Shift+Delete в bubbletea v1.3.10 неотличим от Delete (нет парсинга CSI modifier) — поэтому очистка через /очисточередь.
 - Кириллицу в бинарнике проверять grep, не strings.
+
+## Переменные окружения Ollama / TUI (полный список)
+Источник: `envconfig/config.go` → таблица `AsMap()` + grep по репо. Дата сверки: 2026-10-27.
+TUI отдельного набора не имеет — использует те же переменные, что сервер; свои добавления ниже в конце списка.
+
+### Сеть и подключение
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_HOST` | Адрес:порт сервера (и куда коннектится TUI/CLI) | 127.0.0.1:11434 |
+| `OLLAMA_ORIGINS` | Разрешённые CORS-origins, через запятую | localhost и т.п. |
+| `OLLAMA_REMOTES` | Разрешённые хосты для remote-моделей | ollama.com |
+
+### Модели и память
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_MODELS` | Каталог моделей | ~/.ollama/models |
+| `OLLAMA_KEEP_ALIVE` | Как долго модель держится в памяти (0 = сразу, -1 = всегда) | 5m |
+| `OLLAMA_LOAD_TIMEOUT` | Тайм-аут загрузки модели | 5m |
+| `OLLAMA_MAX_LOADED_MODELS` | Макс. моделей в памяти на GPU (0 = без лимита) | 0 |
+| `OLLAMA_CONTEXT_LENGTH` | Длина контекста, если не задано иначе | 4k/32k/256k по VRAM |
+
+### Очередь и параллелизм
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_NUM_PARALLEL` | Параллельные запросы | 1 |
+| `OLLAMA_MAX_QUEUE` | Размер очереди запросов | 512 |
+| `OLLAMA_MAX_TRANSFER_STREAMS` | Параллельные потоки скачивания safetensors | 4 |
+
+### GPU и кэш
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_FLASH_ATTENTION` | Включить flash attention (нужно для KV-квантования) | off |
+| `OLLAMA_KV_CACHE_TYPE` | Квантование KV-кэша: f16 / q8_0 / q4_0 | f16 |
+| `OLLAMA_GPU_OVERHEAD` | Резерв VRAM на GPU, в байтах | 0 |
+| `OLLAMA_SCHED_SPREAD` | Размазать слои по всем GPU | false |
+| `OLLAMA_IGPU_ENABLE` | Включить встроенные GPU | — |
+| `OLLAMA_VULKAN` | Включить Vulkan | on (не macOS) |
+| `CUDA_VISIBLE_DEVICES` | Какие NVIDIA-GPU видеть | все |
+| `HIP_VISIBLE_DEVICES` / `ROCR_VISIBLE_DEVICES` / `GPU_DEVICE_ORDINAL` | Выбор AMD-GPU по ID/UUID | все |
+| `HSA_OVERRIDE_GFX_VERSION` | Переопределить gfx для AMD GPU | — |
+| `GGML_VK_VISIBLE_DEVICES` | Какие Vulkan-устройства видеть (по ID) | все |
+
+### Рантайм и библиотеки
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_LLM_LIBRARY` | Принудительная LLM-библиотека (обходит автоопределение) | авто |
+| `LLAMA_ARG_FIT` | Авто-подгонка памяти llama.cpp | on |
+| `LLAMA_ARG_FIT_TARGET` | Целевой свободный VRAM для fit, MiB | — |
+| `OLLAMA_GO_TEMPLATE` | Рендер через TEMPLATE из Modelfile | on |
+
+### ТUI / CLI поведение
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_EDITOR` | Редактор для Ctrl+G в TUI | $EDITOR/$VISUAL/xdg-open |
+| `OLLAMA_NOHISTORY` | Не сохранять readline-историю | off |
+| `OLLAMA_NOPRUNE` | Не чистить blob'и моделей при старте | off |
+| `OLLAMA_DEBUG` | Дебаг-логирование (1/true) | off |
+| `OLLAMA_DEBUG_LOG_REQUESTS` | Логировать тела запросов + curl-реплей в temp | off |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (+строчные) | Прокси | — |
+
+### Облако и remote
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `OLLAMA_NO_CLOUD` | Выключить облачные фичи (remote-инференс, web search) | off |
+| `OLLAMA_CREATE_REMOTE` | Создавать модели через серверный API даже при локальном сервере | off |
+
+### Свои (слой VoronBrothers, вне envconfig)
+| Переменная | Описание |
+|---|---|
+| `OLLAMA_ERRDOT_SESSION` | TUI: передать сессию в errdot-отладчик |
+| `OLLAMA_AGENT_DISABLE_SHELL` | Agent-TUI: отключить shell-инструмент (задан = off) |
+| `OLLAMA_AGENT_DISABLE_WEBSEARCH` | Agent-TUI: отключить web-search инструмент (задан = off) |
+
+### Заметки
+- Большинство читается сервером при старте → после изменения нужен рестарт `ollama serve`.
+- Тестовые переменные (`OLLAMA_TEST_*`, `OLLAMA_LAUNCH_OMP_*`) — только для CI, игнорировать.
+- Проверка актуального списка из бинарника: таблица живёт в `envconfig/config.go` → `AsMap()`.
