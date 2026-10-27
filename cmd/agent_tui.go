@@ -352,6 +352,12 @@ func showResponseSupportsMultimodal(resp *api.ShowResponse) bool {
 	return false
 }
 
+// externalAPIModelDefaultContextWindow is the effective context window applied
+// to external API-provider models so automatic compaction effectively never
+// triggers for them (no need for /zip). Local and ollama.com cloud models are
+// unaffected. Overridable downward only via an explicit larger provider config.
+const externalAPIModelDefaultContextWindow = 10_000_000
+
 func agentContextWindowForModel(ctx context.Context, client *api.Client, modelName string, fallback int) int {
 	if client == nil || strings.TrimSpace(modelName) == "" {
 		return fallback
@@ -368,10 +374,22 @@ func agentContextWindowForModel(ctx context.Context, client *api.Client, modelNa
 	if err != nil {
 		return fallback
 	}
-	if tokens := showResponseContextWindow(resp); tokens > 0 {
+	tokens := showResponseContextWindow(resp)
+	// External API-provider models get a very large window by default so the
+	// session is not compacted prematurely (goal: no /zip for API models).
+	if isExternalProviderShow(resp) && tokens < externalAPIModelDefaultContextWindow {
+		tokens = externalAPIModelDefaultContextWindow
+	}
+	if tokens > 0 {
 		return tokens
 	}
 	return fallback
+}
+
+// isExternalProviderShow reports whether a Show response describes an external
+// API-provider model (proxied, not local and not ollama.com cloud).
+func isExternalProviderShow(resp *api.ShowResponse) bool {
+	return resp != nil && resp.RemoteHost != "" && resp.Details.Family == "external"
 }
 
 func agentRecommendationContextWindowForModel(ctx context.Context, client *api.Client, modelName string) int {
