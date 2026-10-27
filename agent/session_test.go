@@ -985,7 +985,7 @@ func TestSessionLocalToolLoopStopsAtDefaultRoundCap(t *testing.T) {
 		Model:       "test:local",
 		NewMessages: []api.Message{{Role: "user", Content: "keep going"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "tool round limit reached after 100 rounds") {
+	if err == nil || !strings.Contains(err.Error(), "tool round limit reached after 1000 rounds") {
 		t.Fatalf("error = %v, want default tool round limit", err)
 	}
 	if client.calls != defaultMaxToolRounds+1 {

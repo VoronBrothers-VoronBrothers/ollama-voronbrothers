@@ -63,7 +63,7 @@ type RunResult struct {
 }
 
 const (
-	defaultMaxToolRounds              = 100
+	defaultMaxToolRounds              = 1000
 	maxToolResultRunes                = 60000
 	smallContextToolResultRunes       = 6000
 	tinyContextToolResultRunes        = 3200
