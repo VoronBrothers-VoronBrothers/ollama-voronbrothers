@@ -103,10 +103,13 @@ func TestMenuRendersOnlyRunChoice(t *testing.T) {
 		t.Fatalf("unexpected root launch choices: %s", diff)
 	}
 
+	// Take the expected labels from the menu item itself so renaming the
+	// root entry does not break this test; what matters here is that the
+	// run entry is the only thing rendered.
 	view := menu.View()
 	for _, want := range []string{
-		"Chat with a model",
-		"Start an interactive chat with a model",
+		runModelMenuItem.title,
+		runModelMenuItem.description,
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected menu view to contain %q\n%s", want, view)
