@@ -14,7 +14,7 @@ func shellToolName() string {
 }
 
 func shellToolDescription() string {
-	return "Execute a bash command on the system. Use this to inspect files, run tests, and perform development tasks."
+	return "Execute a bash command on the system. The working directory persists across calls — after an initial \"cd\" prefer relative paths and avoid re-typing the full path. Use it to inspect files, run tests, and perform development tasks."
 }
 
 func shellCommandDescription() string {

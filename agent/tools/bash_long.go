@@ -67,10 +67,7 @@ func (b *BashLong) Execute(ctx context.Context, toolCtx agent.ToolContext, args 
 }
 
 func (b *BashLong) Description() string {
-	return "Run a shell command with a configurable LONG timeout. Identical to the bash tool but accepts an optional 'timeout' argument in seconds (30-1800; default 600). " +
-		"Pick a timeout matched to how long the command is expected to take — do NOT default to the maximum: use short values for quick waits, longer only when genuinely needed " +
-		"(GPU training, big downloads, full builds). The result returns as soon as the command finishes; the timeout is an upper bound, not a fixed wait. " +
-		"Returns combined output and the final working directory."
+	return "Run a shell command with an optional 'timeout' argument in seconds (30-1800; default 600) for long-running jobs. Returns as soon as the command finishes, with combined output and the final working directory."
 }
 
 func (b *BashLong) Schema() api.ToolFunction {
