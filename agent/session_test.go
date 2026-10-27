@@ -1116,20 +1116,20 @@ func TestSessionTruncatesLargeToolResultsBeforeHistory(t *testing.T) {
 		t.Fatalf("messages = %#v", result.Messages)
 	}
 	content := result.Messages[2].Content
-	if !strings.Contains(content, "[tool output truncated: showing first ~") ||
-		!strings.Contains(content, "omitted ~25 tokens") ||
-		!strings.Contains(content, "Use a narrower command, line range, or search query") {
-		t.Fatalf("tool content missing truncation marker: %q", content)
+	// With spillover: large tool outputs (>15k runes) go to a file; context gets preview + pointer.
+	if !strings.Contains(content, "Tool output spilled to file") {
+		t.Fatalf("tool content missing spill marker: %q", content)
 	}
-	if strings.Count(content, "x") != maxToolResultRunes {
-		t.Fatalf("truncated content x count = %d, want %d", strings.Count(content, "x"), maxToolResultRunes)
+	if !strings.Contains(content, ".ollama/cache/spill/") {
+		t.Fatalf("tool content missing spill path: %q", content)
+	}
+	// Preview is capped at spillPreviewRunes (2000) — well under maxToolResultRunes.
+	if xCount := strings.Count(content, "x"); xCount > spillPreviewRunes+1 {
+		t.Fatalf("spilled preview x count = %d, want at most %d", xCount, spillPreviewRunes+1)
 	}
 	requestContent := client.requests[1].Messages[2].Content
-	if !strings.Contains(requestContent, "[tool output truncated: showing first ~") {
-		t.Fatalf("second model request did not use capped tool content: %q", requestContent)
-	}
-	if strings.Count(requestContent, "x") > maxToolResultRunes {
-		t.Fatalf("request tool content x count = %d, want at most %d", strings.Count(requestContent, "x"), maxToolResultRunes)
+	if !strings.Contains(requestContent, "Tool output spilled to file") {
+		t.Fatalf("second model request did not use spilled tool content: %q", requestContent[:min(len(requestContent), 80)])
 	}
 }
 
@@ -1169,12 +1169,12 @@ func TestSessionSmallContextUsesLowerToolResultPreviewCap(t *testing.T) {
 	}
 
 	content := result.Messages[2].Content
-	if !strings.Contains(content, "[tool output truncated: showing first ~") ||
-		!strings.Contains(content, "Use a narrower command, line range, or search query") {
-		t.Fatalf("tool content missing small-context preview marker: %q", content)
+	// With spillover: large tool outputs (>15k runes) go to a file; context gets preview + pointer.
+	if !strings.Contains(content, "Tool output spilled to file") {
+		t.Fatalf("tool content missing spill marker: %q", content)
 	}
-	if xCount := strings.Count(content, "x"); xCount != smallContextToolResultRunes {
-		t.Fatalf("small-context tool content x count = %d, want %d", xCount, smallContextToolResultRunes)
+	if !strings.Contains(content, ".ollama/cache/spill/") {
+		t.Fatalf("tool content missing spill path: %q", content)
 	}
 	if client.requests[1].Messages[2].Content != content {
 		t.Fatalf("second model request did not use small-context tool preview")

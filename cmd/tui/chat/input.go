@@ -71,6 +71,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
+	{name: "/add", usage: "/add <paths...>", description: "attach text files to context (txt, md); folders = top-level only", aliases: []string{"/прикрепить"}},
 }
 
 var skillsImportCompletions = []chatCompletion{
@@ -190,6 +191,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return m.handleSystemCommand(args)
 	case command == "/skills":
 		return m.handleSkillsCommand(args)
+	case command == "/add":
+		return m.handleAddCommand(args)
 	case command == "/mcp":
 		return m.handleMCPCommand(args)
 	case command == "/очисточередь":
@@ -300,6 +303,80 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 	}
 
 	return m.startRun(input)
+}
+
+func (m *chatModel) handleAddCommand(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Использование: /add <file-or-folder paths...>"}))
+		return *m, nil
+	}
+
+	// Image extensions — rejected outright.
+	imageExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".gif": true}
+	// Accepted text extensions (MVP).
+	textExts := map[string]bool{".txt": true, ".md": true}
+
+	var files []string
+	for _, p := range fields {
+		path := os.ExpandEnv(p)
+		info, err := os.Stat(path)
+		if err != nil {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Не найдено: %s", p)}))
+			return *m, nil
+		}
+		if info.IsDir() {
+			// Top-level only, no recursion.
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Не могу открыть папку: %s", p)}))
+				return *m, nil
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					continue // subfolders excluded
+				}
+				files = append(files, filepath.Join(path, e.Name()))
+			}
+		} else {
+			files = append(files, path)
+		}
+	}
+
+	// Check for images among collected files.
+	for _, f := range files {
+		ext := strings.ToLower(filepath.Ext(f))
+		if imageExts[ext] {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("/add не принимает изображения (%s). Отправь путь текстом — модель с vision посмотрит через view_image.", filepath.Base(f))}))
+			return *m, nil
+		}
+	}
+
+	// Read accepted files.
+	var parts []string
+	totalBytes := 0
+	for _, f := range files {
+		ext := strings.ToLower(filepath.Ext(f))
+		if !textExts[ext] {
+			continue // silently skip non-text extensions for now
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Не могу прочитать %s: %v", f, err)}))
+			return *m, nil
+		}
+		totalBytes += len(data)
+		parts = append(parts, fmt.Sprintf("=== %s ===\n%s", filepath.Base(f), string(data)))
+	}
+
+	if len(parts) == 0 {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Нет текстовых файлов (.txt/.md) для загрузки."}))
+		return *m, nil
+	}
+
+	m.attachedDocs = strings.Join(parts, "\n\n")
+	m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Загружено %d файл(ов) в контекст (%.1f КБ).", len(parts), float64(totalBytes)/1024)}))
+	return *m, nil
 }
 
 func (m *chatModel) handleSkillsCommand(args string) (tea.Model, tea.Cmd) {
@@ -661,9 +738,11 @@ func (m *chatModel) insertInputRunesFromKey(runes []rune, pasted bool) {
 	if len(runes) == 0 {
 		return
 	}
-	if m.opts.MultiModal && (pasted || len(runes) > 1) && m.insertInputFilePlaceholders(string(runes)) {
-		return
-	}
+	// [voron] Авто-прикрепление файлов по пути (base64) убрано:
+	// пользователь пишет путь текстом, модель с vision сама вызывает view_image.
+	// if m.opts.MultiModal && (pasted || len(runes) > 1) && m.insertInputFilePlaceholders(string(runes)) {
+	// 	return
+	// }
 	if pasted && m.insertPastedTextPlaceholder(string(runes)) {
 		return
 	}
@@ -1832,6 +1911,11 @@ func (m chatModel) systemPrompt(extra string) string {
 	var parts []string
 	if !m.systemPromptDisabled && strings.TrimSpace(m.opts.SystemPrompt) != "" {
 		parts = append(parts, strings.TrimSpace(m.opts.SystemPrompt))
+	}
+	// /add: attached documents are injected after the base prompt.
+	// They stay constant for the session → prefix cache friendly.
+	if strings.TrimSpace(m.attachedDocs) != "" {
+		parts = append(parts, "Документы из /add:\n" + m.attachedDocs)
 	}
 	if strings.TrimSpace(extra) != "" {
 		parts = append(parts, strings.TrimSpace(extra))

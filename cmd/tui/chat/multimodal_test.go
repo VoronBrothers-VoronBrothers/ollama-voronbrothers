@@ -76,6 +76,8 @@ func TestChatStartRunAttachesDroppedFileURL(t *testing.T) {
 }
 
 func TestChatPasteImagePathAttachesOnSubmit(t *testing.T) {
+	t.Skip("auto-attachment by path removed: model uses view_image tool instead")
+
 	fp := writeTestPNG(t)
 	m := chatModel{
 		ctx: context.Background(),
@@ -121,6 +123,8 @@ func TestChatPasteImagePathAttachesOnSubmit(t *testing.T) {
 }
 
 func TestChatPasteImagePathAfterSwitchingToMultimodalModel(t *testing.T) {
+	t.Skip("auto-attachment by path removed: model uses view_image tool instead")
+
 	fp := writeTestPNG(t)
 	m := chatModel{
 		ctx:   context.Background(),
@@ -168,6 +172,8 @@ func TestChatPasteImagePathAfterSwitchingToMultimodalModel(t *testing.T) {
 }
 
 func TestChatImagePlaceholdersUseSessionNumbers(t *testing.T) {
+	t.Skip("auto-attachment by path removed: model uses view_image tool instead")
+
 	first := writeTestPNG(t)
 	second := writeTestPNG(t)
 	m := chatModel{
@@ -227,6 +233,8 @@ func TestChatAbsoluteImagePathBypassesSlashCommandParsing(t *testing.T) {
 }
 
 func TestChatDeletingImagePlaceholderRemovesAttachment(t *testing.T) {
+	t.Skip("auto-attachment by path removed: model uses view_image tool instead")
+
 	fp := writeTestPNG(t)
 	m := chatModel{
 		ctx: context.Background(),
@@ -269,6 +277,8 @@ func TestChatDeletingImagePlaceholderRemovesAttachment(t *testing.T) {
 }
 
 func TestChatWordDeletingImagePlaceholderRemovesAttachment(t *testing.T) {
+	t.Skip("auto-attachment by path removed: model uses view_image tool instead")
+
 	fp := writeTestPNG(t)
 	m := chatModel{
 		ctx: context.Background(),

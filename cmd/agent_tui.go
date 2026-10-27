@@ -307,6 +307,10 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 			fmt.Fprintf(os.Stderr, "%s\n", internalcloud.DisabledError("web search is unavailable"))
 		}
 	}
+	// RAG и поиск по файлам — stubs, будут расширены.
+	registry.Register(&agenttools.KnowledgeSearch{})
+	registry.Register(&agenttools.SearchFiles{})
+
 	mcpsPool.RegisterTo(registry)
 	return registry
 }

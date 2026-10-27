@@ -876,6 +876,8 @@ func (s *Session) toolMessageForPostCompactionContext(toolName, toolCallID, cont
 }
 
 func toolMessageWithLimit(toolName, toolCallID, content string, maxRunes int) api.Message {
+	// Spillover: large outputs go to a file; context gets preview + pointer.
+	content = spillToolResult(toolName, content)
 	return api.Message{
 		Role:       "tool",
 		Content:    truncateToolResultContentTo(content, maxRunes),
