@@ -103,9 +103,9 @@ func TestChatNewCommandPreservesLaunchFullAccessDefault(t *testing.T) {
 	}
 }
 
-func TestChatSaveCommandRequiresFilename(t *testing.T) {
+func TestChatSaveCommandMultiWordArgs(t *testing.T) {
 	m := chatModel{
-		input: []rune("/save"),
+		input: []rune("/save foo bar"),
 		opts:  Options{Model: "llama3.2"},
 	}
 
@@ -117,7 +117,7 @@ func TestChatSaveCommandRequiresFilename(t *testing.T) {
 	if fm.status != "error" {
 		t.Fatalf("status = %q, want error", fm.status)
 	}
-	if len(fm.entries) != 1 || !strings.Contains(fm.entries[0].content, "usage: /save <filename>") {
+	if len(fm.entries) != 1 || !strings.Contains(fm.entries[0].content, "usage: /save [filename|path]") {
 		t.Fatalf("entries = %#v, want usage error", fm.entries)
 	}
 }
@@ -125,7 +125,7 @@ func TestChatSaveCommandRequiresFilename(t *testing.T) {
 func TestChatSaveCommandWritesRequestJSON(t *testing.T) {
 	dir := t.TempDir()
 	m := chatModel{
-		input:      []rune("/save request"),
+		input:      []rune("/save ./request"),
 		workingDir: dir,
 		opts: Options{
 			Model:        "llama3.2",
@@ -159,12 +159,13 @@ func TestChatSaveCommandWritesRequestJSON(t *testing.T) {
 			t.Fatalf("saved request missing %q:\n%s", want, raw)
 		}
 	}
-	if got := fm.entries[len(fm.entries)-1].content; got != "saved as request.json" {
-		t.Fatalf("save entry = %q, want saved filename", got)
+	got := fm.entries[len(fm.entries)-1].content
+	if !strings.HasPrefix(got, "saved to ") || !strings.HasSuffix(got, "request.json") {
+		t.Fatalf("save entry = %q, want 'saved to …request.json'", got)
 	}
 }
 
-func TestChatSaveCommandRejectsPath(t *testing.T) {
+func TestChatSaveCommandExplicitPathUsesWorkingDir(t *testing.T) {
 	dir := t.TempDir()
 	m := chatModel{
 		input:      []rune("/save ../request"),
@@ -174,15 +175,19 @@ func TestChatSaveCommandRejectsPath(t *testing.T) {
 
 	updated, cmd := m.handleSubmit()
 	if cmd != nil {
-		t.Fatal("invalid /save should not start a command")
+		t.Fatal("valid /save should not start a command")
 	}
 	fm := updated.(chatModel)
-	if fm.status != "error" {
-		t.Fatalf("status = %q, want error", fm.status)
+	if fm.status != "saved" {
+		t.Fatalf("status = %q, want saved", fm.status)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "request.json")); !os.IsNotExist(err) {
-		t.Fatalf("/save wrote outside working dir, stat err = %v", err)
+	// ../request resolves to parent of temp dir
+	parent := filepath.Dir(dir)
+	data, err := os.ReadFile(filepath.Join(parent, "request.json"))
+	if err != nil {
+		t.Fatalf("expected file in parent dir: %v", err)
 	}
+	_ = data
 }
 
 func TestChatPromptCommandOpensPromptDebugScreen(t *testing.T) {

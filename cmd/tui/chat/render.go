@@ -2053,9 +2053,6 @@ func newChatEntry(entry chatEntry) chatEntry {
 	if entry.version <= 0 {
 		entry.version = 1
 	}
-	if entry.role == "error" {
-		notifyErrorDot()
-	}
 	return entry
 }
 

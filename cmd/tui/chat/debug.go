@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,7 +27,7 @@ type chatPromptDebug struct {
 const maxPromptDebugToolResultRunes = 400
 
 func (m *chatModel) handleSaveCommand(args string) (tea.Model, tea.Cmd) {
-	filename, err := saveRequestFilename(args)
+	path, err := saveTargetPath(args, m.debugWorkingDirStr())
 	if err != nil {
 		return m.addDebugError(err)
 	}
@@ -35,15 +36,13 @@ func (m *chatModel) handleSaveCommand(args string) (tea.Model, tea.Cmd) {
 		return m.addDebugError(err)
 	}
 
-	dir, err := m.debugWorkingDir()
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return m.addDebugError(err)
 	}
-	path := filepath.Join(dir, filename)
 	if err := os.WriteFile(path, []byte(raw+"\n"), 0o644); err != nil {
 		return m.addDebugError(err)
 	}
-	m.entries = append(m.entries, newSlashEntry(fmt.Sprintf("saved as %s", filename)))
+	m.entries = append(m.entries, newSlashEntry("saved to "+path))
 	m.status = "saved"
 	return *m, nil
 }
@@ -567,26 +566,65 @@ func promptMessageLabel(msg api.Message) string {
 	return msg.Role
 }
 
-func saveRequestFilename(args string) (string, error) {
-	args = strings.TrimSpace(args)
-	if args == "" {
-		return "", fmt.Errorf("usage: /save <filename>")
+// saveHomeDir returns ~/.ollama.
+func saveHomeDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".ollama")
+}
+
+// isExplicitSavePath reports whether args looks like a path rather than a bare name.
+func isExplicitSavePath(args string) bool {
+	if strings.HasPrefix(args, "~/") || strings.HasPrefix(args, ".") || strings.HasPrefix(args, "/") {
+		return true
 	}
+	return strings.ContainsAny(args, `\`+"/")
+}
+
+// withJSONExt appends .json if not already present.
+func withJSONExt(name string) string {
+	if !strings.HasSuffix(strings.ToLower(name), ".json") {
+		name += ".json"
+	}
+	return name
+}
+
+// saveTargetPath resolves the full destination for /save args.
+func saveTargetPath(args, workingDir string) (string, error) {
+	args = strings.TrimSpace(args)
 	if strings.HasPrefix(args, ">") {
 		args = strings.TrimSpace(strings.TrimPrefix(args, ">"))
 	}
+
+	// No argument → auto-name in ~/.ollama
+	if args == "" {
+		name := "chat-" + time.Now().Format("2006-01-02-150405") + ".json"
+		return filepath.Join(saveHomeDir(), name), nil
+	}
+
 	fields := strings.Fields(args)
 	if len(fields) != 1 {
-		return "", fmt.Errorf("usage: /save <filename>")
+		return "", fmt.Errorf("usage: /save [filename|path]")
 	}
-	filename := strings.TrimSpace(fields[0])
-	if filename == "" || filename == "." || filename == ".." || strings.ContainsAny(filename, `/\`) || filepath.IsAbs(filename) {
-		return "", fmt.Errorf("save filename must be a file name, not a path")
+
+	// Explicit path → resolve from working dir (or cwd for ~ and abs)
+	if isExplicitSavePath(args) {
+		base := strings.TrimSpace(workingDir)
+		if base == "" {
+			base, _ = os.Getwd()
+		}
+		// expand ~
+		if strings.HasPrefix(args, "~/") {
+			home, _ := os.UserHomeDir()
+			args = filepath.Join(home, args[2:])
+		} else if !filepath.IsAbs(args) {
+			// relative (./foo, ../foo, foo/bar)
+			args = filepath.Join(base, args)
+		}
+		return withJSONExt(filepath.Clean(args)), nil
 	}
-	if !strings.HasSuffix(strings.ToLower(filename), ".json") {
-		filename += ".json"
-	}
-	return filename, nil
+
+	// Bare name → ~/.ollama/<name>.json
+	return filepath.Join(saveHomeDir(), withJSONExt(args)), nil
 }
 
 func (m chatModel) debugWorkingDir() (string, error) {
@@ -595,4 +633,14 @@ func (m chatModel) debugWorkingDir() (string, error) {
 		return dir, nil
 	}
 	return os.Getwd()
+}
+
+// debugWorkingDirStr returns the working directory without error plumbing.
+func (m chatModel) debugWorkingDirStr() string {
+	dir := strings.TrimSpace(m.currentWorkingDir())
+	if dir != "" {
+		return dir
+	}
+	d, _ := os.Getwd()
+	return d
 }

@@ -70,7 +70,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/zip", usage: "/zip [on|off]", description: "toggle automatic context compaction (default on)", aliases: []string{"/зип"}},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
-	{name: "/save", usage: "/save <filename>", description: "save request JSON; saved as <filename>.json"},
+	{name: "/save", usage: "/save [filename|path]", description: "save request JSON to ~/.ollama (or explicit path)"},
 	{name: "/add", usage: "/add <paths...>", description: "attach text files to context (txt, md); folders = top-level only", aliases: []string{"/прикрепить"}},
 }
 
