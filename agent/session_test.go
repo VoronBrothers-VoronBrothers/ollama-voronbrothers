@@ -1123,9 +1123,9 @@ func TestSessionTruncatesLargeToolResultsBeforeHistory(t *testing.T) {
 	if !strings.Contains(content, ".ollama/cache/spill/") {
 		t.Fatalf("tool content missing spill path: %q", content)
 	}
-	// Preview is capped at spillPreviewRunes (2000) — well under maxToolResultRunes.
-	if xCount := strings.Count(content, "x"); xCount > spillPreviewRunes+1 {
-		t.Fatalf("spilled preview x count = %d, want at most %d", xCount, spillPreviewRunes+1)
+	// Spilled replacement keeps head + tail previews — well under maxToolResultRunes.
+	if xCount := strings.Count(content, "x"); xCount > spillPreviewRunes+spillTailRunes+1 {
+		t.Fatalf("spilled preview x count = %d, want at most %d", xCount, spillPreviewRunes+spillTailRunes+1)
 	}
 	requestContent := client.requests[1].Messages[2].Content
 	if !strings.Contains(requestContent, "Tool output spilled to file") {

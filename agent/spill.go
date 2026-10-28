@@ -27,6 +27,10 @@ const (
 	// Model sees the start of the output and can decide if it needs more.
 	spillPreviewRunes = 2000
 
+	// spillTailRunes is how many runes from the END stay in context. Tail matters:
+	// logs typically end with errors/summaries, so head-only previews hide them.
+	spillTailRunes = 1000
+
 	// spillTTL is how long spill files are kept on disk.
 	spillTTL = 24 * time.Hour
 )
@@ -67,19 +71,20 @@ func spillToolResult(toolName, content string) string {
 		return content
 	}
 
-	// Build replacement: preview head + pointer to full file.
-	preview := content
-	if len([]rune(preview)) > spillPreviewRunes {
-		preview = string([]rune(preview)[:spillPreviewRunes])
-	}
-
 	tokenEstimate := runes / 4 // rough: 1 token ≈ 4 runes for mixed text
+	runesSlice := []rune(content)
+	head := string(runesSlice[:spillPreviewRunes])
+	tail := string(runesSlice[len(runesSlice)-spillTailRunes:])
+	omitted := runes - spillPreviewRunes - spillTailRunes
+
 	return fmt.Sprintf(
 		"## Tool output spilled to file\n"+
 			"Full output: %d tokens (≈%d chars), saved at:\n%s\n\n"+
-			"Preview (first %d chars):\n```\n%s...\n```\n\n"+
-			"To read the full output, use the file tool with the path above.",
-		tokenEstimate, runes, filePath, spillPreviewRunes, preview,
+			"Head (first %d chars):\n```\n%s...\n```\n\n"+
+			"[%d chars omitted in the middle]\n\n"+
+			"Tail (last %d chars):\n```\n...%s\n```\n\n"+
+			"To read more, use the file tool `read` on that path with a start/end line range — fetch only the lines you need, not the whole file.",
+		tokenEstimate, runes, filePath, spillPreviewRunes, head, omitted, spillTailRunes, tail,
 	)
 }
 
