@@ -305,8 +305,43 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 	return m.startRun(input)
 }
 
+// splitArgs splits command args into paths, respecting quotes:
+// "path with space" / 'path' stay one token; unquoted tokens split on whitespace.
+func splitArgs(args string) []string {
+	var fields []string
+	current := strings.Builder{}
+	inField := false
+	quote := rune(0)
+	for _, r := range args {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0 // closing quote
+			} else {
+				current.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			quote = r
+			inField = true
+		case unicode.IsSpace(r):
+			if inField {
+				fields = append(fields, current.String())
+				current.Reset()
+				inField = false
+			}
+		default:
+			current.WriteRune(r)
+			inField = true
+		}
+	}
+	if inField || quote != 0 { // unterminated quote — take what we have
+		fields = append(fields, current.String())
+	}
+	return fields
+}
+
 func (m *chatModel) handleAddCommand(args string) (tea.Model, tea.Cmd) {
-	fields := strings.Fields(args)
+	fields := splitArgs(args)
 	if len(fields) == 0 {
 		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Использование: /add <file-or-folder paths...>"}))
 		return *m, nil
