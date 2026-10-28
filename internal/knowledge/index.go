@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 	content,
-	content='chunks', content_rowid='id'
+	content='chunks', content_rowid='id',
+	tokenize='porter unicode61'
 );
 `
 
@@ -198,7 +199,7 @@ func Search(dir string, query string, k int) ([]Result, error) {
 	}
 	defer s.Close()
 
-	match := strings.Join(tokens, " ")
+	match := strings.Join(tokens, " OR ")
 	rows, err := s.conn.Query(
 		`SELECT c.path, c.offset, c.content, bm25(chunks_fts) AS score
 		 FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid

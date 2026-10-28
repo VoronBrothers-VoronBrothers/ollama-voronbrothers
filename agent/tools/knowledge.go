@@ -7,6 +7,7 @@ import (
 
 	"github.com/ollama/ollama/agent"
 	"github.com/ollama/ollama/api"
+	knowledge "github.com/ollama/ollama/internal/knowledge"
 )
 
 // KnowledgeSearch is a RAG tool that searches the ~/.ollama/knowledge/ catalog.
@@ -53,18 +54,54 @@ func (KnowledgeSearch) Execute(_ context.Context, _ agent.ToolContext, args map[
 		return agent.ToolResult{Content: "Error: query is empty"}, nil
 	}
 
-	// TODO: implement BM25 search via SQLite FTS5.
-	// Steps when implementing:
-	//  1. Open ~/.ollama/knowledge/.index.db (create if missing).
-	//  2. Query FTS5 table with the user's query string.
-	//  3. Return top-3 chunks (each ≤500 words) as formatted text.
-	//  4. If index is empty or no matches → "Knowledge base is empty or no matches found."
-	//
-	// Future: hybrid search with embedding vectors (sqlite-vec).
+	dir, err := knowledge.Dir()
+	if err != nil {
+		return agent.ToolResult{Content: fmt.Sprintf("Error: cannot open knowledge base: %v", err)}, nil
+	}
 
-	return agent.ToolResult{Content: fmt.Sprintf(
-		"[knowledge_search stub] query=%q — implementation pending. "+
-			"Place .txt/.md files in ~/.ollama/knowledge/ and re-run after indexing.",
-		query,
-	)}, nil
+	res, note, err := searchKnowledge(dir, query)
+	if err != nil {
+		return agent.ToolResult{Content: fmt.Sprintf("Error: knowledge search failed: %v", err)}, nil
+	}
+	content := ""
+	if note != "" {
+		content = note + "\n\n"
+	}
+	content += res
+	return agent.ToolResult{Content: content}, nil
+}
+
+// searchKnowledge runs a BM25 lookup over the knowledge base, transparently
+// reindexing first when the index lags behind files on disk (lazy reindex).
+func searchKnowledge(dir string, query string) (content string, note string, err error) {
+	st, err := knowledge.IndexStatus(dir)
+	if err != nil {
+		return "", "", fmt.Errorf("check index status: %w", err)
+	}
+
+	if st.Files == 0 {
+		return "Knowledge base is empty. Place .txt/.md files in ~/.ollama/knowledge/ and re-run the search.", "", nil
+	}
+
+	if st.Stale {
+		if _, err := knowledge.Index(dir); err != nil {
+			return "", "", fmt.Errorf("reindex: %w", err)
+		}
+		note = "Knowledge base was just (re)indexed."
+	}
+
+	results, err := knowledge.Search(dir, query, knowledge.MaxChunks)
+	if err != nil {
+		return "", note, fmt.Errorf("search: %w", err)
+	}
+	if len(results) == 0 {
+		return "No relevant results found in the knowledge base for this query.", note, nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Found %d relevant fragment(s):\n\n", len(results)))
+	for _, r := range results {
+		fmt.Fprintf(&b, "--- Source: %s (byte offset %d) ---\n%s\n\n", r.Path, r.Offset, r.Content)
+	}
+	return b.String(), note, nil
 }
