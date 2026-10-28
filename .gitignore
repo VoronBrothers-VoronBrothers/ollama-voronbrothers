@@ -19,3 +19,7 @@ integration/testdata/models/
 
 # TUI `/save <name>.json` request dumps — written to cwd; keep out of git if saved in-repo
 [0-9]*.json
+request.json
+deepseek-test*.json
+dots.json
+haiku-*.json
