@@ -1958,7 +1958,7 @@ func (m chatModel) systemPrompt(extra string) string {
 	// /add: attached documents are injected after the base prompt.
 	// They stay constant for the session → prefix cache friendly.
 	if strings.TrimSpace(m.attachedDocs) != "" {
-		parts = append(parts, "Файлы, загруженные через /add: их ПОЛНОЕ содержимое приведено ниже. Не читай эти файлы повторно инструментами (Read и т.п.) — работай с текстом из контекста.\n" + m.attachedDocs)
+		parts = append(parts, "Файлы, загруженные через /add: их ПОЛНОЕ содержимое приведено ниже. Не читай эти файлы повторно инструментами (Read и т.п.) — работай с текстом из контекста.\n"+m.attachedDocs)
 	}
 	if strings.TrimSpace(extra) != "" {
 		parts = append(parts, strings.TrimSpace(extra))
