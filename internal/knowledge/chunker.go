@@ -22,6 +22,7 @@ const (
 type Chunk struct {
 	Path    string `json:"path"`
 	Offset  int    `json:"offset"` // byte offset in the file, for citation
+	Heading string `json:"heading,omitempty"` // nearest preceding markdown heading
 	Content string `json:"content"`
 }
 
@@ -41,20 +42,27 @@ func chunkText(text string, target int) []Chunk {
 	var out []Chunk
 	var pending []string // piece texts for the current chunk
 	pendingStart := 0    // byte offset of the first piece in the current chunk
+	pendingHead := ""
 	pendingWords := 0
 
 	flush := func() {
 		if len(pending) == 0 {
 			return
 		}
-		out = append(out, Chunk{Offset: pendingStart, Content: strings.Join(pending, "\n\n")})
+		c := Chunk{Offset: pendingStart, Content: strings.Join(pending, "\n\n"), Heading: pendingHead}
+		out = append(out, c)
 		pending = nil
+		pendingHead = ""
 		pendingWords = 0
 	}
 
+
 	for _, blk := range splitBlocks(text) {
 		for _, p := range cutLargeBlock(blk.text, target) {
-			w := wordCount(p.text)
+			if blk.head != "" {
+				pendingHead = blk.head
+			}
+		w := wordCount(p.text)
 			if len(pending) > 0 && pendingWords+w > target {
 				flush()
 			}
@@ -73,8 +81,9 @@ func chunkText(text string, target int) []Chunk {
 }
 
 type blockPiece struct {
-	text  string
-	start int // byte offset within the block, not the document
+	text    string
+	head    string // nearest preceding markdown heading line (may be empty)
+	start   int    // byte offset within the block, not the document
 }
 
 // splitBlocks splits text on blank lines; a markdown heading line starts its
@@ -82,15 +91,16 @@ type blockPiece struct {
 // carries the byte offset where it began in the original text.
 func splitBlocks(text string) []blockPiece {
 	var blocks []blockPiece
-	flushSeg := func(start int, seg []string) {
+	flushSeg := func(start int, seg []string, head string) {
 		if len(seg) == 0 {
 			return
 		}
-		blocks = append(blocks, blockPiece{text: strings.Join(seg, "\n"), start: start})
+		blocks = append(blocks, blockPiece{text: strings.Join(seg, "\n"), start: start, head: head})
 	}
 
 	var cur []string
 	curStart := 0
+	var curHead string
 
 	for off := 0; off < len(text); {
 		rest := text[off:]
@@ -107,23 +117,28 @@ func splitBlocks(text string) []blockPiece {
 		}
 
 		if strings.TrimRight(line, " \t\r") == "" {
-			flushSeg(curStart, cur)
+			flushSeg(curStart, cur, curHead)
 			cur = nil
+			curHead = ""
 			off = nextOff
 			continue
 		}
 
 		if len(cur) > 0 && isHeading(line) {
-			flushSeg(curStart, cur)
+			flushSeg(curStart, cur, curHead)
 			cur = nil
+			curHead = ""
 		}
 		if len(cur) == 0 {
 			curStart = off
+			if isHeading(line) {
+				curHead = strings.TrimRight(line, " \t\r")
+			}
 		}
 		cur = append(cur, line)
 		off = nextOff
 	}
-	flushSeg(curStart, cur)
+	flushSeg(curStart, cur, curHead)
 
 	return blocks
 }

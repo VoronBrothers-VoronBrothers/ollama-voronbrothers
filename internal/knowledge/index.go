@@ -24,11 +24,12 @@ CREATE TABLE IF NOT EXISTS chunks (
 	id      INTEGER PRIMARY KEY,
 	path    TEXT NOT NULL,
 	offset  INTEGER NOT NULL,
+	heading TEXT NOT NULL DEFAULT '',
 	content TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-	content,
+	heading, content,
 	content='chunks', content_rowid='id',
 	tokenize='porter unicode61'
 );
@@ -58,6 +59,43 @@ type Status struct {
 	Stale     bool
 }
 
+// migrate upgrades in-place indexes built by older versions: it adds the
+// heading column to chunks and recreates the FTS table with the weighted
+// (heading, content) columns.
+func migrate(conn *sql.DB) error {
+	var count int
+	if err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name = 'heading'").Scan(&count); err != nil {
+		return fmt.Errorf("inspect chunks schema: %w", err)
+	}
+	if count > 0 {
+		return nil // already on the new schema
+	}
+	x, err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer x.Rollback()
+	if _, err := x.Exec("ALTER TABLE chunks ADD COLUMN heading TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("add heading column: %w", err)
+	}
+	// External-content FTS table cannot change columns in place: recreate it.
+	if _, err := x.Exec("DROP TABLE IF EXISTS chunks_fts"); err != nil {
+		return fmt.Errorf("drop old fts table: %w", err)
+	}
+	ftsSchema := `CREATE VIRTUAL TABLE chunks_fts USING fts5(
+		heading, content,
+		content='chunks', content_rowid='id',
+		tokenize='porter unicode61'
+	)`
+	if _, err := x.Exec(ftsSchema); err != nil {
+		return fmt.Errorf("recreate fts table: %w", err)
+	}
+	if _, err := x.Exec(`INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')`); err != nil {
+		return fmt.Errorf("rebuild fts after migration: %w", err)
+	}
+	return x.Commit()
+}
+
 func openStore(path string) (*Store, error) {
 	conn, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
@@ -66,6 +104,10 @@ func openStore(path string) (*Store, error) {
 	if _, err := conn.Exec(schema); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("init knowledge schema: %w", err)
+	}
+	if err := migrate(conn); err != nil {
+		conn.Close()
+		return nil, err
 	}
 	s := &Store{conn: conn}
 	if err := s.conn.Ping(); err != nil {
@@ -146,7 +188,7 @@ func Index(dir string) (*Status, error) {
 	if _, err := tx.Exec("DELETE FROM chunks"); err != nil {
 		return rollback(fmt.Errorf("clear chunks: %w", err))
 	}
-	insertChunk, err := tx.Prepare("INSERT INTO chunks (path, offset, content) VALUES (?, ?, ?)")
+	insertChunk, err := tx.Prepare("INSERT INTO chunks (path, offset, heading, content) VALUES (?, ?, ?, ?)")
 	if err != nil {
 		return rollback(err)
 	}
@@ -160,7 +202,7 @@ func Index(dir string) (*Status, error) {
 		}
 		rel, _ := filepath.Rel(dir, f)
 		for _, c := range chunkText(text, ChunkSizeWords) {
-			if _, err := insertChunk.Exec(rel, c.Offset, c.Content); err != nil {
+			if _, err := insertChunk.Exec(rel, c.Offset, c.Heading, c.Content); err != nil {
 				return rollback(fmt.Errorf("insert chunk for %s: %w", rel, err))
 			}
 			chunksTotal++
@@ -201,7 +243,8 @@ func Search(dir string, query string, k int) ([]Result, error) {
 
 	match := strings.Join(tokens, " OR ")
 	rows, err := s.conn.Query(
-		`SELECT c.path, c.offset, c.content, bm25(chunks_fts) AS score
+		`SELECT c.path, c.offset, c.heading, c.content,
+		        bm25(chunks_fts, 3.0, 1.0) AS score
 		 FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
 		 WHERE chunks_fts MATCH ?
 		 ORDER BY score LIMIT ?`, match, k)
@@ -213,7 +256,7 @@ func Search(dir string, query string, k int) ([]Result, error) {
 	var out []Result
 	for rows.Next() {
 		var r Result
-		if err := rows.Scan(&r.Path, &r.Offset, &r.Content, &r.Score); err != nil {
+		if err := rows.Scan(&r.Path, &r.Offset, &r.Heading, &r.Content, &r.Score); err != nil {
 			return nil, fmt.Errorf("scan fts row: %w", err)
 		}
 		out = append(out, r)

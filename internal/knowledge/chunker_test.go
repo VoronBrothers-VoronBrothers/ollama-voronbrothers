@@ -218,3 +218,23 @@ func makeWords(n int) []string {
 	}
 	return out
 }
+
+func TestChunkHeadingPropagation(t *testing.T) {
+	text := strings.Repeat("word ", 10) + "\n\n# Section A\n" + strings.Repeat("alpha ", 20) + "\n\n" + strings.Repeat("beta ", 20)
+	chunks := chunkText(text, 5)
+	if len(chunks) == 0 {
+		t.Fatal("no chunks")
+	}
+	sawHeading := false
+	for _, c := range chunks {
+		if strings.Contains(c.Content, "alpha") && !strings.HasPrefix(c.Heading, "# Section A") {
+			t.Errorf("chunk with 'alpha' has heading %q, want '# Section A'", c.Heading)
+		}
+		if c.Heading != "" {
+			sawHeading = true
+		}
+	}
+	if !sawHeading {
+		t.Error("no chunk carried a heading")
+	}
+}

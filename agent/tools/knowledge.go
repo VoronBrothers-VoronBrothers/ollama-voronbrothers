@@ -99,9 +99,27 @@ func searchKnowledge(dir string, query string) (content string, note string, err
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Found %d relevant fragment(s):\n\n", len(results)))
-	for _, r := range results {
-		fmt.Fprintf(&b, "--- Source: %s (byte offset %d) ---\n%s\n\n", r.Path, r.Offset, r.Content)
+	// Deduplicate adjacent chunks from the same file: keep only the best hit.
+	kept, hidden := 0, 0
+	for i := range results {
+		r := &results[i]
+		if kept>0 && r.Path == results[i-1].Path && r.Offset-results[i-1].Offset < 4000 {
+			hidden++
+			continue
+		}
+		if kept > 0 {
+			b.WriteString("\n")
+		}
+		heading := ""
+		if r.Heading != "" {
+			heading = " § " + r.Heading
+		}
+		fmt.Fprintf(&b, "--- Source: %s%s (byte offset %d) ---\n%s", r.Path, heading, r.Offset, r.Content)
+		kept++
 	}
-	return b.String(), note, nil
+	head := fmt.Sprintf("Found %d relevant fragment(s):\n\n", kept)
+	if hidden > 0 {
+		head = fmt.Sprintf("Found %d relevant fragment(s) (%d adjacent duplicate(s) omitted):\n\n", kept, hidden)
+	}
+	return head + b.String(), note, nil
 }
