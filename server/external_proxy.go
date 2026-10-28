@@ -56,6 +56,10 @@ type openaiChatRequest struct {
 	Tools       []openaiTool    `json:"tools,omitempty"` // [voron] function calling
 	MaxTokens   *int            `json:"max_tokens,omitempty"`
 	Temperature *float64        `json:"temperature,omitempty"`
+	// [voron] ask for the final usage chunk so cached_tokens can be logged
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
 }
 
 // openaiTool mirrors OpenAI's tool definition (Ollama sends the same shape).
@@ -97,8 +101,10 @@ type ollamaChatResponse struct {
 	DoneReason      string            `json:"done_reason,omitempty"`
 	TotalDuration   time.Duration     `json:"total_duration,omitempty"`
 	PromptEvalCount int               `json:"prompt_eval_count,omitempty"`
-	EvalCount       int               `json:"eval_count,omitempty"`
-	EvalDuration    time.Duration     `json:"eval_duration,omitempty"`
+	// [voron] cached prompt tokens (nil = provider did not report it)
+	PromptEvalCachedCount *int          `json:"prompt_eval_cached_count,omitempty"`
+	EvalCount             int           `json:"eval_count,omitempty"`
+	EvalDuration          time.Duration `json:"eval_duration,omitempty"`
 }
 
 type ollamaRespMessage struct {
@@ -125,8 +131,12 @@ type openaiSSEChunk struct {
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details,omitempty"`
+		PromptCacheHitTokens int `json:"prompt_cache_hit_tokens,omitempty"` // DeepSeek-style
 	} `json:"usage,omitempty"`
 }
 
@@ -175,10 +185,12 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	var (
-		evalCount    int
-		promptTokens int
-		finishReason string
-		toolAcc      map[int]*openaiInCall // [voron] накопленные tool_calls по индексу
+		evalCount     int
+		promptTokens  int
+		cachedTokens  int
+		reportedCache bool // [voron] провайдер прислал поле кэша
+		finishReason  string
+		toolAcc       map[int]*openaiInCall // [voron] накопленные tool_calls по индексу
 	)
 	toolAcc = make(map[int]*openaiInCall)
 
@@ -231,9 +243,14 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 
 		if chunk.Usage != nil {
 			promptTokens = chunk.Usage.PromptTokens
+			cachedTokens = chunk.Usage.PromptCacheHitTokens
+			if d := chunk.Usage.PromptTokensDetails; d != nil {
+				cachedTokens = max(cachedTokens, d.CachedTokens)
+			}
+			reportedCache = reportedCache || chunk.Usage.PromptCacheHitTokens > 0 || chunk.Usage.PromptTokensDetails != nil
 		}
 
-		if content == "" && thinking == "" && finishReason == "" {
+		if content == "" && thinking == "" {
 			continue
 		}
 
@@ -243,30 +260,8 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 			Model:     modelDisplay,
 			CreatedAt: time.Now(),
 			Message:   ollamaRespMessage{Role: "assistant", Content: content, Thinking: thinking},
-			Done:      finishReason != "",
+			Done:      false,
 			EvalCount: evalCount,
-		}
-
-		if resp.Done {
-			resp.DoneReason = mapFinishReason(finishReason)
-			resp.TotalDuration = time.Since(startTime).Round(time.Millisecond)
-			resp.PromptEvalCount = promptTokens
-			resp.EvalDuration = time.Since(startTime).Round(time.Millisecond)
-		}
-
-		// [voron] tool calls: отдельная строка перед done-чанком
-		if resp.Done && len(toolAcc) > 0 {
-			if tcLine, mErr := json.Marshal(ollamaChatResponse{
-				Model:     modelDisplay,
-				CreatedAt: time.Now(),
-				Message:   ollamaRespMessage{Role: "assistant", ToolCalls: buildToolCallsOut(toolAcc)},
-			}); mErr == nil {
-				c.Writer.Write(tcLine)
-				c.Writer.Write([]byte("\n"))
-				if canFlush {
-					flusher.Flush()
-				}
-			}
 		}
 
 		lineBytes, err := json.Marshal(resp)
@@ -278,11 +273,63 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 		if canFlush {
 			flusher.Flush()
 		}
+	}
 
-		if resp.Done {
-			break
+	// [voron] итоговая строка отправляется после [DONE], чтобы успеть получить usage
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+	final := ollamaChatResponse{
+		Model:           modelDisplay,
+		CreatedAt:       time.Now(),
+		Message:         ollamaRespMessage{Role: "assistant"},
+		Done:            true,
+		DoneReason:      mapFinishReason(finishReason),
+		TotalDuration:   time.Since(startTime).Round(time.Millisecond),
+		PromptEvalCount: promptTokens,
+		EvalCount:       evalCount,
+		EvalDuration:    time.Since(startTime).Round(time.Millisecond),
+	}
+	if reportedCache {
+		final.PromptEvalCachedCount = &cachedTokens
+	}
+
+	// [voron] tool calls: отдельная строка перед done-чанком
+	if len(toolAcc) > 0 {
+		if tcLine, mErr := json.Marshal(ollamaChatResponse{
+			Model:     modelDisplay,
+			CreatedAt: time.Now(),
+			Message:   ollamaRespMessage{Role: "assistant", ToolCalls: buildToolCallsOut(toolAcc)},
+		}); mErr == nil {
+			c.Writer.Write(tcLine)
+			c.Writer.Write([]byte("\n"))
+			if canFlush {
+				flusher.Flush()
+			}
 		}
 	}
+
+	if doneLine, err := json.Marshal(final); err == nil {
+		c.Writer.Write(doneLine)
+		c.Writer.Write([]byte("\n"))
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	// [voron] лог экономии кэша промпта у провайдера
+	hitPct := 0.0
+	if promptTokens > 0 {
+		hitPct = float64(cachedTokens) * 100 / float64(promptTokens)
+	}
+	slog.Info("external usage",
+		"model", modelDisplay,
+		"prompt_tokens", promptTokens,
+		"cached_tokens", cachedTokens,
+		"cache_hit_pct", fmt.Sprintf("%.1f", hitPct),
+		"completion_tokens", evalCount,
+		"duration", time.Since(startTime).Round(time.Millisecond),
+	)
 
 	if !canFlush {
 		slog.Debug("external proxy: writer does not support flush")
@@ -320,6 +367,9 @@ func buildOpenAIRequest(extRef *externalModelRef, ollamaBody []byte) ([]byte, er
 		Model:    extRef.ModelID, // strip provider prefix, send "vendor/model"
 		Messages: make([]openaiMessage, 0, len(req.Messages)),
 		Stream:   true,
+		StreamOptions: &struct {
+			IncludeUsage bool `json:"include_usage"`
+		}{IncludeUsage: true},
 	}
 
 	// [voron] tools passthrough (Ollama и OpenAI используют одинаковый формат)

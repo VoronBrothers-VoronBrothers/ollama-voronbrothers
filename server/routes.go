@@ -2455,7 +2455,9 @@ func (s *Server) GenerateRoutes() (http.Handler, error) {
 	r.POST("/v1/audio/speech", s.SpeechHandler)
 
 	// Inference (Anthropic compatibility)
-	r.POST("/v1/messages", s.withInferenceRequestLogging("/v1/messages", cloudPassthroughMiddleware(cloudErrRemoteInferenceUnavailable), middleware.AnthropicMessagesMiddleware(lookupThinking), s.ChatHandler)...)
+	// [voron] external models: raw passthrough so client cache_control (prompt
+	// caching) reaches Anthropic-style providers untouched; local fall through.
+	r.POST("/v1/messages", s.withInferenceRequestLogging("/v1/messages", externalMessagesProxyMiddleware(), cloudPassthroughMiddleware(cloudErrRemoteInferenceUnavailable), middleware.AnthropicMessagesMiddleware(lookupThinking), s.ChatHandler)...)
 
 	return r, nil
 }
