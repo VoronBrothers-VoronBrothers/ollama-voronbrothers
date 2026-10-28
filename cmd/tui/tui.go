@@ -2,10 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ollama/ollama/cmd/launch"
+	knowledge "github.com/ollama/ollama/internal/knowledge"
 	"github.com/ollama/ollama/version"
 )
 
@@ -42,6 +45,7 @@ type menuItem struct {
 	description string
 	integration string
 	isRunModel  bool
+	isKnowledge bool
 	isOthers    bool
 }
 
@@ -49,6 +53,12 @@ var runModelMenuItem = menuItem{
 	title:       "Working and interacting with a model",
 	description: "If you need a model for testing, use either the CPU-assistant or the orchestrator that is already loaded",
 	isRunModel:  true,
+}
+
+var knowledgeMenuItem = menuItem{
+	title:       "Knowledge base / RAG",
+	description: "Search local documents (.txt/.md): index status, reindex, open folder",
+	isKnowledge: true,
 }
 
 var othersMenuItem = menuItem{
@@ -70,6 +80,11 @@ type model struct {
 	quitting   bool
 	selected   bool
 	action     TUIAction
+
+	// Knowledge base / RAG sub-screen state.
+	showKB bool
+	kbText string // multi-line status shown on the KB screen
+	kbBusy bool
 }
 
 func newModel(state *launch.LauncherState) model {
@@ -95,7 +110,7 @@ func shouldExpandOthers(state *launch.LauncherState) bool {
 }
 
 func buildMenuItems(state *launch.LauncherState, showOthers bool) []menuItem {
-	return []menuItem{runModelMenuItem}
+	return []menuItem{runModelMenuItem, knowledgeMenuItem}
 }
 
 func integrationMenuItem(state launch.LauncherIntegrationState) menuItem {
@@ -151,7 +166,7 @@ func otherIntegrationItems(state *launch.LauncherState) []menuItem {
 }
 
 func primaryMenuItemCount(state *launch.LauncherState) int {
-	return 1 + len(launcherIntegrationItems(state))
+	return 2 + len(launcherIntegrationItems(state))
 }
 
 func initialCursor(state *launch.LauncherState, items []menuItem) int {
@@ -180,6 +195,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.showKB {
+			return m.updateKB(msg)
+		}
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
 			m.quitting = true
@@ -207,7 +225,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "enter", " ":
-			if m.selectableItem(m.items[m.cursor]) {
+			item := m.items[m.cursor]
+			if item.isKnowledge {
+				m.showKB = true
+				m.kbText = kbStatusText()
+				return m, nil
+			}
+			if m.selectableItem(item) {
 				m.selected = true
 				m.action = actionForMenuItem(m.items[m.cursor], false)
 				m.quitting = true
@@ -230,8 +254,75 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateKB handles keys on the Knowledge base / RAG sub-screen.
+func (m model) updateKB(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		m.quitting = true
+		return m, tea.Quit
+	case "esc", "b": // back to the main menu
+		m.showKB = false
+		return m, nil
+	case "i": // index now (synchronous; local KBs are small)
+		dir, err := knowledge.Dir()
+		if err != nil {
+			m.kbText = fmt.Sprintf("Cannot open knowledge dir: %v", err)
+		} else if st, err := knowledge.Index(dir); err != nil {
+			m.kbText = fmt.Sprintf("Index error: %v", err)
+		} else {
+			m.kbText = formatKBStatus(st) + "\n\nIndexed."
+		}
+		return m, nil
+	case "o": // open folder in the file manager
+		if dir, err := knowledge.Dir(); err == nil {
+			go openInFileManager(dir)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func kbStatusText() string {
+	dir, err := knowledge.Dir()
+	if err != nil {
+		return fmt.Sprintf("Cannot open knowledge dir: %v", err)
+	}
+	st, err := knowledge.IndexStatus(dir)
+	if err != nil {
+		return fmt.Sprintf("Cannot read index status: %v", err)
+	}
+	return formatKBStatus(st)
+}
+
+func formatKBStatus(st *knowledge.Status) string {
+	state := "up to date"
+	if st.Stale {
+		state = "STALE (files changed on disk — press i to reindex)"
+	}
+	indexedAt := "never"
+	if !st.IndexedAt.IsZero() {
+		indexedAt = st.IndexedAt.Local().Format("2006-01-02 15:04")
+	}
+	return fmt.Sprintf(
+		"Files: %d    Chunks: %d\nIndex last updated: %s\nState: %s",
+		st.Files, st.Chunks, indexedAt, state)
+}
+
+func openInFileManager(dir string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "windows":
+		cmd = exec.Command("explorer", dir)
+	default:
+		cmd = exec.Command("xdg-open", dir)
+	}
+	_ = cmd.Start()
+}
+
 func (m model) selectableItem(item menuItem) bool {
-	if item.isRunModel {
+	if item.isRunModel || item.isKnowledge {
 		return true
 	}
 	if item.integration == "" {
@@ -255,6 +346,16 @@ func (m model) View() string {
 	}
 
 	s := selectorTitleStyle.Render("Ollama TUI "+versionStyle.Render(version.Version)) + "\n\n"
+
+	if m.showKB {
+		s += menuSelectedItemStyle.Render("Knowledge base / RAG") + "\n\n" +
+			menuItemStyle.Render(m.kbText) + "\n\n" +
+			selectorHelpStyle.Render("i index now • o open folder • esc back to menu • Ctrl+C quit")
+		if m.width > 0 {
+			return lipgloss.NewStyle().MaxWidth(m.width).Render(s)
+		}
+		return s
+	}
 
 	for i, item := range m.items {
 		s += m.renderMenuItem(i, item)
@@ -288,6 +389,10 @@ func (m model) renderMenuItem(index int, item menuItem) string {
 		}
 	} else if item.isOthers {
 		// More immediately expands when reached, so it always uses the default style.
+	} else if item.isKnowledge {
+		if m.cursor == index {
+			style = menuSelectedItemStyle
+		}
 	} else {
 		integrationState := m.state.Integrations[item.integration]
 		if !integrationState.Selectable {
@@ -331,6 +436,7 @@ const (
 	TUIActionNone TUIActionKind = iota
 	TUIActionRunModel
 	TUIActionLaunchIntegration
+	TUIActionKnowledge
 )
 
 type TUIAction struct {
@@ -345,6 +451,8 @@ func (a TUIAction) LastSelection() string {
 		return "run"
 	case TUIActionLaunchIntegration:
 		return a.Integration
+	case TUIActionKnowledge:
+		return "knowledge"
 	default:
 		return ""
 	}
@@ -365,6 +473,8 @@ func actionForMenuItem(item menuItem, forceConfigure bool) TUIAction {
 	switch {
 	case item.isRunModel:
 		return TUIAction{Kind: TUIActionRunModel, ForceConfigure: forceConfigure}
+	case item.isKnowledge:
+		return TUIAction{Kind: TUIActionKnowledge}
 	case item.integration != "":
 		return TUIAction{Kind: TUIActionLaunchIntegration, Integration: item.integration, ForceConfigure: forceConfigure}
 	default:

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,7 +97,7 @@ func compareStrings(got, want []string) string {
 	return cmp.Diff(want, got)
 }
 
-func TestMenuRendersOnlyRunChoice(t *testing.T) {
+func TestMenuRendersRootChoices(t *testing.T) {
 	state := launcherTestState()
 	menu := newModel(state)
 	want := []string{"run"}
@@ -103,13 +105,13 @@ func TestMenuRendersOnlyRunChoice(t *testing.T) {
 		t.Fatalf("unexpected root launch choices: %s", diff)
 	}
 
-	// Take the expected labels from the menu item itself so renaming the
-	// root entry does not break this test; what matters here is that the
-	// run entry is the only thing rendered.
+	// The root menu must show the run entry and the knowledge base entry.
 	view := menu.View()
 	for _, want := range []string{
 		runModelMenuItem.title,
 		runModelMenuItem.description,
+		knowledgeMenuItem.title,
+		knowledgeMenuItem.description,
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected menu view to contain %q\n%s", want, view)
@@ -125,16 +127,18 @@ func TestMenuRendersOnlyRunChoice(t *testing.T) {
 	}
 }
 
-func TestMenuNavigationStaysOnRun(t *testing.T) {
+func TestMenuNavigationCyclesRootItems(t *testing.T) {
 	menu := newModel(launcherTestState())
-	for _, msg := range []tea.KeyMsg{
-		{Type: tea.KeyDown}, {Type: tea.KeyDown}, {Type: tea.KeyUp}, {Type: tea.KeyUp},
-	} {
-		updated, _ := menu.Update(msg)
-		menu = updated.(model)
-		if menu.cursor != 0 || !menu.items[0].isRunModel {
-			t.Fatalf("expected cursor to stay on run item, got cursor=%d", menu.cursor)
-		}
+	// Root menu: run item (0) and knowledge item (1).
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyDown})
+	menu = updated.(model)
+	if menu.cursor != 1 || !menu.items[1].isKnowledge {
+		t.Fatalf("expected cursor on knowledge item after down, got %d", menu.cursor)
+	}
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyUp})
+	menu = updated.(model)
+	if menu.cursor != 0 || !menu.items[0].isRunModel {
+		t.Fatalf("expected cursor back on run item after up, got %d", menu.cursor)
 	}
 }
 
@@ -173,5 +177,40 @@ func TestMenuShowsCurrentModelSuffixOnRun(t *testing.T) {
 	view := menu.View()
 	if !strings.Contains(view, "(qwen3:8b)") {
 		t.Fatalf("expected run row to show current model suffix\n%s", view)
+	}
+}
+
+func TestMenuKnowledgeScreenShowsStatus(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	kbDir := filepath.Join(home, ".ollama", "knowledge")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "a.md"), []byte("# t\n\ntext here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	menu := newModel(launcherTestState())
+	// Move to the knowledge item and enter it.
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyDown})
+	menu = updated.(model)
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	if !menu.showKB {
+		t.Fatal("expected knowledge screen to open")
+	}
+	view := menu.View()
+	for _, want := range []string{"Files:", "Chunks:", "STALE", "i index now"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("knowledge screen missing %q\n%s", want, view)
+		}
+	}
+
+	// esc returns to the main menu.
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	menu = updated.(model)
+	if menu.showKB {
+		t.Fatal("expected back on main menu after esc")
 	}
 }

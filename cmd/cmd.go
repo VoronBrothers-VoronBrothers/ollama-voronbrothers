@@ -2537,6 +2537,11 @@ func runLauncherAction(cmd *cobra.Command, action tui.TUIAction, deps launcherDe
 			return false, nil
 		}
 		return true, nil
+	case tui.TUIActionKnowledge:
+		// The knowledge base / RAG screen is self-contained in the TUI
+		// (status, reindex, open folder); nothing to do here.
+		saveLauncherSelection(action)
+		return true, nil
 	default:
 		return false, fmt.Errorf("unknown launcher action: %d", action.Kind)
 	}
