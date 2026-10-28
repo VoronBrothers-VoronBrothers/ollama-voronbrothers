@@ -312,10 +312,8 @@ func (m *chatModel) handleAddCommand(args string) (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Image extensions — rejected outright.
+	// Image extensions — rejected outright with a hint.
 	imageExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".gif": true}
-	// Accepted text extensions (MVP).
-	textExts := map[string]bool{".txt": true, ".md": true}
 
 	var files []string
 	for _, p := range fields {
@@ -355,22 +353,32 @@ func (m *chatModel) handleAddCommand(args string) (tea.Model, tea.Cmd) {
 	// Read accepted files.
 	var parts []string
 	totalBytes := 0
+	var skipped []string
 	for _, f := range files {
-		ext := strings.ToLower(filepath.Ext(f))
-		if !textExts[ext] {
-			continue // silently skip non-text extensions for now
+		if !isSafeToAttach(f) {
+			skipped = append(skipped, filepath.Base(f))
+			continue // binary / unsupported extension
 		}
 		data, err := os.ReadFile(f)
 		if err != nil {
 			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Не могу прочитать %s: %v", f, err)}))
 			return *m, nil
 		}
+		formatted, ferr := formatAttachedFile(f, data)
+		if ferr != nil {
+			skipped = append(skipped, filepath.Base(f)+" (пустой)")
+			continue
+		}
 		totalBytes += len(data)
-		parts = append(parts, fmt.Sprintf("=== %s ===\n%s", filepath.Base(f), string(data)))
+		parts = append(parts, formatted)
 	}
 
 	if len(parts) == 0 {
-		m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Нет текстовых файлов (.txt/.md) для загрузки."}))
+		msg := "Нет файлов для загрузки. Поддерживаются: код (.go/.py/.js/…), данные (.json/.jsonl/.csv), тексты (.txt/.md/.yaml…)."
+		if len(skipped) > 0 {
+			msg = fmt.Sprintf("Пропущены: %s\n%s", strings.Join(skipped, ", "), msg)
+		}
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: msg}))
 		return *m, nil
 	}
 
@@ -1915,7 +1923,7 @@ func (m chatModel) systemPrompt(extra string) string {
 	// /add: attached documents are injected after the base prompt.
 	// They stay constant for the session → prefix cache friendly.
 	if strings.TrimSpace(m.attachedDocs) != "" {
-		parts = append(parts, "Документы из /add:\n" + m.attachedDocs)
+		parts = append(parts, "Файлы, загруженные через /add: их ПОЛНОЕ содержимое приведено ниже. Не читай эти файлы повторно инструментами (Read и т.п.) — работай с текстом из контекста.\n" + m.attachedDocs)
 	}
 	if strings.TrimSpace(extra) != "" {
 		parts = append(parts, strings.TrimSpace(extra))

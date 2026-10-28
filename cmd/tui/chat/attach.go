@@ -2,7 +2,6 @@ package chat
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,7 +74,7 @@ func formatAttachedFile(path string, content []byte) (string, error) {
 		filepath.Base(path),
 		lang,
 		lines,
-		pluralSuffix(lines),
+		ruPluralSuffix(lines),
 	)
 
 	codeBlock := fmt.Sprintf("```%s\n%s\n```", lang, text)
@@ -94,29 +93,12 @@ func countJSONL(data []byte) int {
 }
 
 func formatJSONL(path string, content []byte, totalLines int) string {
-	lines := bytes.Split(content, []byte{'\n'})
-	previewLines := 12
-	if len(lines) < previewLines {
-		previewLines = len(lines)
-	}
-
-	var preview []string
-	for i := 0; i < previewLines; i++ {
-		if trimmed := strings.TrimSpace(string(lines[i])); trimmed != "" {
-			preview = append(preview, trimmed)
-		}
-	}
-
-	previewText := strings.Join(preview, "\n")
-	if totalLines > previewLines {
-		previewText += fmt.Sprintf("\n... (и ещё %d записей)", totalLines-previewLines)
-	}
-
+	text := strings.TrimSpace(string(content))
 	header := fmt.Sprintf("--- %s (JSON Lines, %d записей) ---", filepath.Base(path), totalLines)
-	return header + "\n```jsonl\n" + previewText + "\n```\n"
+	return header + "\n```jsonl\n" + text + "\n```\n"
 }
 
-func pluralSuffix(n int) string {
+func ruPluralSuffix(n int) string {
 	if n%10 == 1 && n%100 != 11 {
 		return "а"
 	}
