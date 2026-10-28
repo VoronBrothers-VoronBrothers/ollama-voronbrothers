@@ -71,7 +71,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save [filename|path]", description: "save request JSON to ~/.ollama (or explicit path)"},
-	{name: "/add", usage: "/add <paths...>", description: "attach text files to context (txt, md); folders = top-level only", aliases: []string{"/прикрепить"}},
+	{name: "/add", usage: "/add <paths...>", description: "attach files to context; folders = top-level only", aliases: []string{"/прикрепить"}},
 }
 
 var skillsImportCompletions = []chatCompletion{
