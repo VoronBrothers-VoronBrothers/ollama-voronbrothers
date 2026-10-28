@@ -35,7 +35,7 @@ func TestChatHelpCommandShowsV1Commands(t *testing.T) {
 		"- `/help`: show commands",
 		"- `/bye`: exit",
 		"- `/prompt`: show full prompt, tools, and messages",
-		"- `/save <filename>`: save request JSON; saved as <filename>.json",
+		"- `/save [filename|path]`: save request JSON to ~/.ollama (or explicit path)",
 		"**Shortcuts**",
 		"- `shift+enter`: insert a newline",
 		"- `shift+tab`: toggle permission mode",
@@ -1374,7 +1374,7 @@ func TestChatSlashCommandSuggestionsIncludePromptAndSave(t *testing.T) {
 		description string
 	}{
 		{input: "/pr", command: "/prompt", description: "show full prompt, tools, and messages"},
-		{input: "/sa", command: "/save", description: "save request JSON; saved as <filename>.json"},
+		{input: "/sa", command: "/save", description: "save request JSON to ~/.ollama (or explicit path)"},
 	} {
 		t.Run(tt.command, func(t *testing.T) {
 			m := chatModel{input: []rune(tt.input)}
