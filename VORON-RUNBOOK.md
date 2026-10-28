@@ -54,8 +54,9 @@ ollama --version   # → например "0.40.2-voron-09102026"
 
 # Шаг 2: собрать (версия = та же или выше + свежая дата)
 cd /home/voron/Документы/VB-ollama/GitHub Ollama кастомный бинарник/ollama fork our fork
-go build -ldflags "-X github.com/ollama/ollama/version.Version=0.40.2-voron-$(date +%d%m%Y)" \
+go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version=0.40.2-voron-$(date +%d%m%Y)" \
   -o /tmp/ollama-patched .
+# -tags sqlite_fts5: нужен для RAG-индекса internal/knowledge (SQLite FTS5).
 
 # Шаг 3: бэкап + установка (mv, не cp!)
 sudo cp /usr/local/bin/ollama /usr/local/bin/ollama-<старая-версия>.bak
