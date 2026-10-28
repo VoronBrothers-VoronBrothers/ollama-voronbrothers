@@ -28,10 +28,20 @@ func TestMetricsSummaryLinesCachedPromptTokens(t *testing.T) {
 		PromptEvalDuration:    time.Second,
 	})
 	got := strings.Join(lines, "\n")
-	for _, want := range []string{"prompt eval count:    10 token(s)", "prompt eval cached:   4 token(s)", "prompt eval rate:     6.00 tokens/s"} {
+	for _, want := range []string{"prompt eval count:    10 token(s)", "prompt eval cached:   4 token(s)", "prompt cache hit:     40%", "prompt eval rate:     6.00 tokens/s"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary missing %q:\n%s", want, got)
 		}
+	}
+
+	// Zero cache hit is reported as 0%; a nil (unreported) field is omitted.
+	noHit := metricsSummaryLines(&api.Metrics{PromptEvalCount: 100, PromptEvalCachedCount: testIntPtr(0)})
+	if !strings.Contains(strings.Join(noHit, "\n"), "prompt cache hit:     0%") {
+		t.Errorf("zero-hit summary should show 0%%:\n%s", strings.Join(noHit, "\n"))
+	}
+	unreported := metricsSummaryLines(&api.Metrics{PromptEvalCount: 100})
+	if strings.Contains(strings.Join(unreported, "\n"), "prompt cache hit:") {
+		t.Errorf("nil cached count must not render a hit ratio:\n%s", strings.Join(unreported, "\n"))
 	}
 }
 

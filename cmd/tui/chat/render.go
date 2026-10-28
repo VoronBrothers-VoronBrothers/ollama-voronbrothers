@@ -627,6 +627,10 @@ func metricsSummaryLines(metrics *api.Metrics) []string {
 	if cached > 0 {
 		lines = append(lines, fmt.Sprintf("prompt eval cached:   %d token(s)", cached))
 	}
+	if metrics.PromptEvalCachedCount != nil && metrics.PromptEvalCount > 0 {
+		pct := float64(*metrics.PromptEvalCachedCount) / float64(metrics.PromptEvalCount) * 100
+		lines = append(lines, fmt.Sprintf("prompt cache hit:     %.0f%%", pct))
+	}
 	if metrics.PromptEvalDuration > 0 {
 		lines = append(lines, fmt.Sprintf("prompt eval duration: %s", metrics.PromptEvalDuration))
 		uncached := max(0, metrics.PromptEvalCount-cached)
@@ -670,7 +674,7 @@ func tokensNoteFromResponse(response api.ChatResponse, wasThinking bool, thinkin
 	if response.PromptEvalCount > 0 {
 		line := fmt.Sprintf("prompt %d", response.PromptEvalCount)
 		if cached := response.PromptEvalCachedCount; cached != nil && *cached > 0 {
-			line += fmt.Sprintf(" (кэш %d)", *cached)
+			line += fmt.Sprintf(" (кэш %.0f%%)", float64(*cached)/float64(response.PromptEvalCount)*100)
 		}
 		parts = append(parts, line)
 	}
