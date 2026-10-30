@@ -50,6 +50,16 @@ func TestKnowledgeSearchFindsContentAndReindexes(t *testing.T) {
 		t.Fatalf("want notes.md hit with content, got: %s", out)
 	}
 
+	// New output format must give the agent an absolute path plus a 1-based
+	// line range so it can fetch more directly with the read tool.
+	abs := filepath.Join(dir, "notes.md")
+	if !strings.Contains(out, abs) {
+		t.Fatalf("want absolute source path %q in output, got:\n%s", abs, out)
+	}
+	if !strings.Contains(out, "(lines ") || !strings.Contains(out, ") ---\n") {
+		t.Fatalf("want 'lines N-M' range marker in output, got:\n%s", out)
+	}
+
 	// New file appears on disk: next search must transparently reindex and find it.
 	writeKBFile(t, filepath.Join(dir, "weather.txt"), "The weather in Voronezh is rainy.\n")
 	out = runKnowledgeSearch(t, "voronezh rain")

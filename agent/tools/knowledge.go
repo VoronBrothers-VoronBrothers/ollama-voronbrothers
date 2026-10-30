@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ollama/ollama/agent"
@@ -101,12 +103,15 @@ func searchKnowledge(dir string, query string) (content string, note string, err
 	var b strings.Builder
 	// Deduplicate adjacent chunks from the same file: keep only the best hit.
 	kept, hidden := 0, 0
+	fileCache := map[string][]byte{}
 	for i := range results {
 		r := &results[i]
 		if kept>0 && r.Path == results[i-1].Path && r.Offset-results[i-1].Offset < 4000 {
 			hidden++
 			continue
 		}
+		abs := filepath.Join(dir, r.Path)
+		startL, endL := lineRange(fileCache, abs, r.Offset, r.Content)
 		if kept > 0 {
 			b.WriteString("\n")
 		}
@@ -114,7 +119,7 @@ func searchKnowledge(dir string, query string) (content string, note string, err
 		if r.Heading != "" {
 			heading = " § " + r.Heading
 		}
-		fmt.Fprintf(&b, "--- Source: %s%s (byte offset %d) ---\n%s", r.Path, heading, r.Offset, r.Content)
+		fmt.Fprintf(&b, "--- Source: %s%s (lines %d-%d) ---\n%s", abs, heading, startL, endL, r.Content)
 		kept++
 	}
 	head := fmt.Sprintf("Found %d relevant fragment(s):\n\n", kept)
@@ -122,4 +127,28 @@ func searchKnowledge(dir string, query string) (content string, note string, err
 		head = fmt.Sprintf("Found %d relevant fragment(s) (%d adjacent duplicate(s) omitted):\n\n", kept, hidden)
 	}
 	return head + b.String(), note, nil
+}
+
+// lineRange converts a chunk's byte offset into an inclusive 1-based line
+// range (startLine-endLine) so the agent can fetch it directly with the read
+// tool: `read <absPath> start=startLine end=endLine`. The file is read once per
+// unique path and cached for the duration of one search call.
+func lineRange(cache map[string][]byte, abs string, offset int, content string) (int, int) {
+	var data []byte
+	if b, ok := cache[abs]; ok {
+		data = b
+	} else if b, err := os.ReadFile(abs); err == nil {
+		cache[abs] = b
+		data = b
+	}
+	n := len(data)
+	if offset > n {
+		offset = n
+	}
+	startLine := strings.Count(string(data[:offset]), "\n") + 1
+	endLine := startLine + strings.Count(content, "\n")
+	if endLine < startLine {
+		endLine = startLine
+	}
+	return startLine, endLine
 }
