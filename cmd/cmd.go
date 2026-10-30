@@ -850,6 +850,19 @@ func showOrPullModel(cmd *cobra.Command, client *api.Client, name, runner string
 	return info, resolved, err
 }
 
+// runDeprecatedHandler is the stub for the deprecated 'run' command. It does not
+// start a chat; it only tells the user that 'ollama run' is retired in favour of
+// 'ollama chat'.
+func runDeprecatedHandler(cmd *cobra.Command, args []string) error {
+	fmt.Fprintln(os.Stderr, "вызов устарел: 'ollama run' больше не используется.")
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, "Используйте вместо него: ollama chat %s\n", strings.Join(args, " "))
+	} else {
+		fmt.Fprintln(os.Stderr, "Используйте вместо него: ollama chat MODEL [PROMPT]")
+	}
+	return nil
+}
+
 func RunHandler(cmd *cobra.Command, args []string) error {
 	interactive := true
 
@@ -2622,19 +2635,22 @@ func NewCLI() *cobra.Command {
 	showCmd.Flags().Bool("system", false, "Show system message of a model")
 	showCmd.Flags().BoolP("verbose", "v", false, "Show detailed model information")
 
-	runCmd := &cobra.Command{
+runCmd := &cobra.Command{
 		Use:   "run MODEL [PROMPT]",
-		Short: "Run a model",
-		Example: `  ollama run gemma4
-  ollama run gemma4 "Why is the sky blue?"
-  ollama run nimble --ask "Is a refund being requested?" < ticket.txt
-  ollama run nimble --ask "Which team should handle this?" \
-    --choice billing="Payments and refunds" \
-    --choice technical="Software problems" < ticket.txt
-  ollama run nimble --ask "How urgent is this?" \
-    --level "Routine" \
-    --level "Soon" \
-    --level "Immediate" < ticket.txt`,
+		Short: "Run a model (deprecated, use 'chat')",
+		Example: `  ollama run gemma4 "Why is the sky blue?"`,
+		Args:    cobra.MinimumNArgs(1),
+		RunE:    runDeprecatedHandler,
+	}
+
+	// chatCmd is the replacement for the deprecated 'run' command. It uses the
+	// same flags and handler as 'run' used to, but with the original v0.34
+	// interactive loop (no background pending-reader buffering).
+	chatCmd := &cobra.Command{
+		Use:   "chat MODEL [PROMPT]",
+		Short: "Chat with a model",
+		Example: `  ollama chat gemma4
+  ollama chat gemma4 "Why is the sky blue?"`,
 		Args:    cobra.MinimumNArgs(1),
 		PreRunE: checkServerHeartbeat,
 		RunE:    RunHandler,
@@ -2657,6 +2673,25 @@ func NewCLI() *cobra.Command {
 	runCmd.Flags().Var(questionFlag{"ask", &asked}, "ask", "Ask a decision model a question, answered yes or no unless --choice or --level follow")
 	runCmd.Flags().Var(questionFlag{"choice", &asked}, "choice", `Add a label for the preceding --ask to choose from, e.g. billing="Payments and refunds"`)
 	runCmd.Flags().Var(questionFlag{"level", &asked}, "level", "Add a level to score the preceding --ask on, from lowest to highest")
+
+	// Mirror the exact same flags onto chatCmd so RunHandler behaves identically.
+	chatCmd.Flags().String("keepalive", "", "Duration to keep a model loaded (e.g. 5m)")
+	chatCmd.Flags().Bool("verbose", false, "Show timings for response")
+	chatCmd.Flags().Bool("insecure", false, "Use an insecure registry")
+	chatCmd.Flags().Bool("nowordwrap", false, "Don't wrap words to the next line automatically")
+	chatCmd.Flags().String("format", "", "Response format (e.g. json)")
+	chatCmd.Flags().String("runner", "", "Runner to use for manifest list selection (mlx, ggml, llamacpp)")
+	chatCmd.Flags().MarkHidden("runner")
+	chatCmd.Flags().String("think", "", "Enable thinking mode: true/false or high/medium/low for supported models")
+	chatCmd.Flags().Lookup("think").NoOptDefVal = "true"
+	chatCmd.Flags().Bool("hidethinking", false, "Hide thinking output (if provided)")
+	chatCmd.Flags().Bool("truncate", false, "For embedding models: truncate inputs exceeding context length (default: true). Set --truncate=false to error instead")
+	chatCmd.Flags().Int("dimensions", 0, "Truncate output embeddings to specified dimension (embedding model only)")
+	chatCmd.Flags().String("voice", "", "Voice to speak with (speech models only)")
+	var chatAsked []askedQuestion
+	chatCmd.Flags().Var(questionFlag{"ask", &chatAsked}, "ask", "Ask a decision model a question, answered yes or no unless --choice or --level follow")
+	chatCmd.Flags().Var(questionFlag{"choice", &chatAsked}, "choice", `Add a label for the preceding --ask to choose from, e.g. billing="Payments and refunds"`)
+	chatCmd.Flags().Var(questionFlag{"level", &chatAsked}, "level", "Add a level to score the preceding --ask on, from lowest to highest")
 
 	stopCmd := &cobra.Command{
 		Use:     "stop MODEL",
@@ -2790,6 +2825,7 @@ func NewCLI() *cobra.Command {
 		createCmd,
 		showCmd,
 		runCmd,
+		chatCmd,
 		stopCmd,
 		pullCmd,
 		pushCmd,
@@ -2801,7 +2837,8 @@ func NewCLI() *cobra.Command {
 	} {
 		switch cmd {
 		case runCmd:
-			appendEnvDocs(cmd, []envconfig.EnvVar{envVars["OLLAMA_EDITOR"], envVars["OLLAMA_HOST"], envVars["OLLAMA_NOHISTORY"]})
+		appendEnvDocs(cmd, []envconfig.EnvVar{envVars["OLLAMA_EDITOR"], envVars["OLLAMA_HOST"], envVars["OLLAMA_NOHISTORY"]})
+		case chatCmd:
 		case serveCmd:
 			appendEnvDocs(cmd, []envconfig.EnvVar{
 				envVars["OLLAMA_DEBUG"],
@@ -2836,6 +2873,7 @@ func NewCLI() *cobra.Command {
 		createCmd,
 		showCmd,
 		runCmd,
+		chatCmd,
 		stopCmd,
 		pullCmd,
 		pushCmd,

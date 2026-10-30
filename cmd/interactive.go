@@ -11,9 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -38,6 +36,7 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 		fmt.Fprintln(os.Stderr, "Available Commands:")
 		fmt.Fprintln(os.Stderr, "  /set            Set session variables")
 		fmt.Fprintln(os.Stderr, "  /show           Show model information")
+		fmt.Fprintln(os.Stderr, "  /add <paths>    Attach text files (txt/md/py/json/jsonl/...) to context")
 		fmt.Fprintln(os.Stderr, "  /load <model>   Load a session or model")
 		fmt.Fprintln(os.Stderr, "  /save <model>   Save your current session")
 		fmt.Fprintln(os.Stderr, "  /clear          Clear session context")
@@ -69,7 +68,6 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 		fmt.Fprintln(os.Stderr, "  /set quiet             Disable LLM stats")
 		fmt.Fprintln(os.Stderr, "  /set think             Enable thinking")
 		fmt.Fprintln(os.Stderr, "  /set nothink           Disable thinking")
-		fmt.Fprintln(os.Stderr, "  /set autosend <sec>    Auto-send after N sec idle (0=off)")
 		fmt.Fprintln(os.Stderr, "")
 	}
 
@@ -121,6 +119,7 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 	scanner, err := readline.New(readline.Prompt{
 		Prompt:         ">>> ",
 		AltPrompt:      "... ",
+		Placeholder:    "Send a message (/? for help)",
 		AltPlaceholder: "Press Enter to send",
 	})
 	if err != nil {
@@ -135,37 +134,12 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 	defer fmt.Printf(readline.EndBracketedPaste)
 
 	var sb strings.Builder
+	// attachedDocs accumulates files attached via /add; injected into context on send.
+	var attachedDocs strings.Builder
 	var multiline MultilineState
 	var thinkExplicitlySet bool = opts.Think != nil
-	// Decision models retain the first message and answer questions about it.
-	var decisionState *api.Message
-
-	// Background reader: lines entered while a response is being generated
-	// are queued in this channel and sent after generation completes.
-	type lineResult struct {
-		line string
-		err  error
-	}
-	// Buffered so multiple messages can queue during one generation.
-	pending := make(chan lineResult, 128)
-	go func() {
-		for {
-			l, e := scanner.Readline()
-			pending <- lineResult{l, e}
-		}
-	}()
 
 	for {
-		switch {
-		case !opts.Decision:
-			scanner.Prompt.Placeholder = "Send a message (/? for help)"
-		case opts.Questions.Len() > 0:
-			scanner.Prompt.Placeholder = "Enter text to evaluate (/? for help)"
-		case decisionState != nil:
-			scanner.Prompt.Placeholder = "Ask yes/no questions about the text, one per line (/? for help)"
-		default:
-			scanner.Prompt.Placeholder = "Enter text to evaluate, then ask yes/no questions (/? for help)"
-		}
 		line, err := scanner.Readline()
 		switch {
 		case errors.Is(err, io.EOF):
@@ -253,7 +227,7 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 			opts.Messages = []api.Message{}
 			opts.LoadedMessages = nil
 			fmt.Printf("Loading model '%s'\n", opts.Model)
-			info, err := client.Show(cmd.Context(), &api.ShowRequest{Model: opts.Model, Runner: opts.Runner})
+			info, err := client.Show(cmd.Context(), &api.ShowRequest{Model: opts.Model})
 			if err != nil {
 				if strings.Contains(err.Error(), "not found") {
 					fmt.Printf("Couldn't find model '%s'\n", opts.Model)
@@ -263,12 +237,6 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 				return err
 			}
 			applyShowResponseToRunOptions(&opts, info)
-			opts.Decision = slices.Contains(info.Capabilities, model.CapabilityDecision)
-			decisionState = nil
-			if opts.Decision {
-				// Decision models can't generate; the first answer loads the model.
-				continue
-			}
 			opts.Think, err = inferThinkingOption(&info.Capabilities, &opts, thinkExplicitlySet)
 			if err != nil {
 				return err
@@ -312,7 +280,6 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 			fmt.Printf("Created new model '%s'\n", args[1])
 			continue
 		case strings.HasPrefix(line, "/clear"):
-			decisionState = nil
 			opts.Messages = []api.Message{}
 			if opts.System != "" {
 				newMessage := api.Message{Role: "system", Content: opts.System}
@@ -383,23 +350,6 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 				case "noformat":
 					opts.Format = ""
 					fmt.Println("Disabled format.")
-				case "autosend":
-					if len(args) < 3 {
-						secs := int64(120)
-						scanner.AutoSendDuration = time.Duration(secs) * time.Second
-						fmt.Printf("Auto-send enabled: %d sec idle.\n", secs)
-					} else {
-						n, err := strconv.Atoi(args[2])
-						if err != nil || n < 0 {
-							fmt.Println("Usage: /set autosend <seconds> (0 to disable)")
-						} else if n == 0 {
-							scanner.AutoSendDuration = 0
-							fmt.Println("Auto-send disabled.")
-						} else {
-							scanner.AutoSendDuration = time.Duration(n) * time.Second
-							fmt.Printf("Auto-send enabled: %d sec idle.\n", n)
-						}
-					}
 				case "parameter":
 					if len(args) < 4 {
 						usageParameters()
@@ -467,7 +417,6 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 				}
 				req := &api.ShowRequest{
 					Name:    opts.Model,
-					Runner:  opts.Runner,
 					System:  opts.System,
 					Options: opts.Options,
 				}
@@ -542,6 +491,8 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 			}
 		case strings.HasPrefix(line, "/exit"), strings.HasPrefix(line, "/bye"):
 			return nil
+		case strings.HasPrefix(line, "/add"):
+			handleAddCommand(line, &attachedDocs)
 		case strings.HasPrefix(line, "/"):
 			args := strings.Fields(line)
 			isFile := false
@@ -566,46 +517,25 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 		}
 
 		if sb.Len() > 0 && multiline == MultilineNone {
-			input := sb.String()
-			sb.Reset()
-			if opts.Decision && decisionState != nil {
-				// Each line is a question, so pasting several asks them together.
-				var questions []string
-				for _, line := range strings.Split(input, "\n") {
-					if line = strings.TrimSpace(line); line != "" {
-						questions = append(questions, line)
-					}
-				}
-				if len(questions) > 0 {
-					if err := decide(cmd, opts, *decisionState, yesNoQuestions(questions...)); err != nil {
-						fmt.Printf("error: %v\n", err)
-					}
-				}
-				continue
-			}
-
-			newMessage := api.Message{Role: "user", Content: input}
-
+			content := sb.String()
+			var images []api.ImageData
 			if opts.MultiModal {
-				if newMessage.Content, newMessage.Images, err = extractFileData(input); err != nil {
+				var err error
+				content, images, err = extractFileData(content)
+				if err != nil {
 					return err
 				}
 			}
 
-			if opts.Decision {
-				newMessage.Content = strings.TrimSpace(newMessage.Content)
-				switch {
-				case newMessage.Content == "" && len(newMessage.Images) == 0:
-				case opts.Questions.Len() > 0:
-					// With --ask, every message is a state to answer the questions about.
-					if err := decide(cmd, opts, newMessage, opts.Questions); err != nil {
-						fmt.Printf("error: %v\n", err)
-					}
-				default:
-					decisionState = &newMessage
-				}
-				continue
+			// Inject files attached via /add (full text in context).
+			if attachedDocs.Len() > 0 {
+				content = strings.TrimSpace(content) + "\n\n" +
+					"Файлы, загруженные через /add: их ПОЛНОЕ содержимое приведено ниже. " +
+					"Не читай эти файлы повторно инструментами (Read и т.п.) — работай с текстом из контекста.\n" +
+					attachedDocs.String()
 			}
+
+			newMessage := api.Message{Role: "user", Content: content, Images: images}
 			opts.Messages = append(opts.Messages, newMessage)
 
 			assistant, err := chat(cmd, opts)
@@ -613,6 +543,7 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 				if strings.Contains(err.Error(), "does not support thinking") ||
 					strings.Contains(err.Error(), "invalid think value") {
 					fmt.Printf("error: %v\n", err)
+					sb.Reset()
 					continue
 				}
 				return err
@@ -620,8 +551,130 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 			if assistant != nil {
 				opts.Messages = append(opts.Messages, *assistant)
 			}
+
+			sb.Reset()
 		}
 	}
+}
+
+// --- /add support: attach text files to context (mirrors the TUI /add) ---
+
+var addLangByExt = map[string]string{
+	".go": "go", ".py": "python", ".js": "javascript", ".ts": "typescript",
+	".rs": "rust", ".c": "c", ".cpp": "cpp", ".h": "c", ".java": "java",
+	".sh": "bash", ".sql": "sql", ".json": "json", ".jsonl": "jsonl",
+	".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".md": "markdown",
+	".markdown": "markdown", ".txt": "text", ".csv": "csv", ".env": "text",
+}
+
+var addBinaryExts = map[string]bool{
+	".exe": true, ".bin": true, ".pyc": true, ".class": true, ".pdf": true,
+	".doc": true, ".docx": true, ".png": true, ".jpg": true, ".jpeg": true,
+	".webp": true, ".gif": true, ".zip": true, ".tar": true, ".gz": true,
+}
+
+func handleAddCommand(line string, docs *strings.Builder) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: /add <file-or-folder paths...>   (folders = top-level only; images are NOT added here — paste their path as text for vision models)")
+		return
+	}
+
+	total := 0
+	for _, p := range fields[1:] {
+		added, err := addPathToDocs(p, docs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			continue
+		}
+		total += added
+	}
+
+	switch {
+	case total > 0:
+		fmt.Printf("Приложено файлов/блоков: %d (будут вставлены в контекст при отправке)\n", total)
+	default:
+		fmt.Fprintln(os.Stderr, "Ничего не добавлено.")
+	}
+}
+
+// addPathToDocs adds a file — or the top-level files of a folder — to docs.
+func addPathToDocs(p string, docs *strings.Builder) (int, error) {
+	p = expandHome(p)
+	info, err := os.Stat(p)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %v", filepath.Base(p), err)
+	}
+
+	count := 0
+	if info.IsDir() {
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			return 0, err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue // top-level only
+			}
+			block, err := formatAddFile(filepath.Join(p, e.Name()))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  skip %s: %v\n", e.Name(), err)
+				continue
+			}
+			writeDocBlock(docs, block)
+			count++
+		}
+		return count, nil
+	}
+
+	block, err := formatAddFile(p)
+	if err != nil {
+		return 0, err
+	}
+	writeDocBlock(docs, block)
+	return 1, nil
+}
+
+func writeDocBlock(docs *strings.Builder, block string) {
+	if docs.Len() > 0 {
+		docs.WriteString("\n\n")
+	}
+	docs.WriteString(block)
+}
+
+func expandHome(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
+}
+
+func formatAddFile(path string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if addBinaryExts[ext] {
+		return "", fmt.Errorf("%s: бинарный файл, пропущен", filepath.Base(path))
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return "", fmt.Errorf("%s: пустой файл", filepath.Base(path))
+	}
+
+	lang := addLangByExt[ext]
+	if lang == "" {
+		lang = "text"
+	}
+
+	lines := strings.Count(text, "\n") + 1
+	header := fmt.Sprintf("--- %s (%s, %d строк) ---", filepath.Base(path), lang, lines)
+	return header + "\n```" + lang + "\n" + text + "\n```\n", nil
 }
 
 func NewCreateRequest(name string, opts runOptions) *api.CreateRequest {
