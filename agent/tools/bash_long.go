@@ -11,17 +11,17 @@ import (
 const bashLongToolName = "bash_long"
 
 // Per-call bounds for the optional `timeout` argument of bash_long.
-// The default (no argument) stays at bashLongTimeout, 10 minutes.
+// When the argument is absent (or non-positive) the default bashLongTimeout
+// (120 s) is used. BASH-LONG-BOUNDS: менять диапазон здесь.
 const (
-	// Per-call bounds for the optional `timeout` argument of bash_long.
-	// The default (no argument) stays at bashLongTimeout, 10 minutes.
-	bashLongMinTimeout = 30 * time.Second
-	bashLongMaxTimeout = 1800 * time.Second // 30 minutes
+	bashLongMinTimeout = 60 * time.Second
+	bashLongMaxTimeout = 400 * time.Second // ~6-7 minutes
 )
 
-// BashLong is a parallel shell tool identical to Bash in behaviour, but with an
-// extended, configurable deadline (default 10 minutes). It exists so the model
-// can wait on long-running commands (GPU training, large downloads) without
+// BashLong is a parallel shell tool identical to Bash in behaviour, but with a
+// configurable deadline. Without a `timeout` argument it runs for up to 120 s
+// (vs. the fixed 40 s of `bash`); the caller may raise that up to 400 s. It exists
+// so the model can wait on longer commands (builds, large downloads) without
 // hitting the short 40s timeout of `bash`. The whole execution path is reused
 // from the embedded *Bash; only identity and the effective timeout differ.
 type BashLong struct {
@@ -38,7 +38,7 @@ func (b *BashLong) Name() string {
 }
 
 // Execute runs the embedded Bash with a per-call timeout taken from the optional
-// `timeout` argument in seconds (30-1800; default 600 when absent or non-positive).
+// `timeout` argument in seconds (60-400; default 120 when absent or non-positive).
 // The deadline is only an upper bound: the result returns as soon as the command
 // finishes. A value copy of the shared *Bash is used so concurrent calls do not
 // race on state.
@@ -67,7 +67,7 @@ func (b *BashLong) Execute(ctx context.Context, toolCtx agent.ToolContext, args 
 }
 
 func (b *BashLong) Description() string {
-	return "Run a shell command with an optional 'timeout' argument in seconds (30-1800; default 600) for long-running jobs. Returns as soon as the command finishes, with combined output and the final working directory."
+	return "Run a shell command with an optional 'timeout' argument in seconds (60-400; default 120) for long-running jobs. Returns as soon as the command finishes, with combined output and the final working directory."
 }
 
 func (b *BashLong) Schema() api.ToolFunction {
@@ -78,7 +78,7 @@ func (b *BashLong) Schema() api.ToolFunction {
 	})
 	props.Set("timeout", api.ToolProperty{
 		Type:        api.PropertyType{"integer"},
-		Description: "Optional upper bound in seconds (30-1800, default 600). Set it to the expected duration of the command; do not blindly use the maximum.",
+		Description: "Optional upper bound in seconds (60-400, default 120). Set it to the expected duration of the command; do not blindly use the maximum.",
 	})
 	return api.ToolFunction{
 		Name:        b.Name(),
