@@ -43,6 +43,18 @@ func (b *BashLong) Name() string {
 // finishes. A value copy of the shared *Bash is used so concurrent calls do not
 // race on state.
 func (b *BashLong) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[string]any) (agent.ToolResult, error) {
+	t := b.callTimeout(args)
+	lb := *b.Bash // value copy (holds only Timeout): safe under concurrent calls
+	lb.Timeout = t
+	return lb.Execute(ctx, toolCtx, args)
+}
+
+// callTimeout resolves the effective deadline for one call: the `timeout`
+// argument (seconds) clamped to [bashLongMinTimeout, bashLongMaxTimeout], or the
+// configured default (bashLongTimeout) when the argument is absent, non-numeric
+// or non-positive. Kept separate from Execute so the bounds are testable without
+// spawning a shell.
+func (b *BashLong) callTimeout(args map[string]any) time.Duration {
 	t := b.effectiveTimeout()
 	if v, ok := args["timeout"]; ok {
 		var secs int
@@ -61,9 +73,7 @@ func (b *BashLong) Execute(ctx context.Context, toolCtx agent.ToolContext, args 
 			}
 		}
 	}
-	lb := *b.Bash // value copy (holds only Timeout): safe under concurrent calls
-	lb.Timeout = t
-	return lb.Execute(ctx, toolCtx, args)
+	return t
 }
 
 func (b *BashLong) Description() string {
