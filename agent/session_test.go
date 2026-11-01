@@ -1120,7 +1120,7 @@ func TestSessionTruncatesLargeToolResultsBeforeHistory(t *testing.T) {
 	if !strings.Contains(content, "Tool output spilled to file") {
 		t.Fatalf("tool content missing spill marker: %q", content)
 	}
-	if !strings.Contains(content, ".ollama/cache/spill/") {
+	if !strings.Contains(content, "ollama-spill/") {
 		t.Fatalf("tool content missing spill path: %q", content)
 	}
 	// Spilled replacement keeps head + tail previews — well under maxToolResultRunes.
@@ -1173,7 +1173,7 @@ func TestSessionSmallContextUsesLowerToolResultPreviewCap(t *testing.T) {
 	if !strings.Contains(content, "Tool output spilled to file") {
 		t.Fatalf("tool content missing spill marker: %q", content)
 	}
-	if !strings.Contains(content, ".ollama/cache/spill/") {
+	if !strings.Contains(content, "ollama-spill/") {
 		t.Fatalf("tool content missing spill path: %q", content)
 	}
 	if client.requests[1].Messages[2].Content != content {

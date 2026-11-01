@@ -15,8 +15,8 @@ import (
 // Why: long bash outputs, large file reads, web extracts eat tokens. Spillover
 // keeps only a preview + path in context; full text lives on disk.
 //
-// File location: ~/.ollama/cache/spill/{sha256[:16]}.txt
-// Cleanup: TTL 24h (files older than that are removed on next spill).
+// File location: os.TempDir()/ollama-spill/{hash}.txt  (e.g. /tmp/ollama-spill/)
+// Cleanup: TTL 24h via cleanupSpillFiles; OS also cleans /tmp periodically.
 
 const (
 	// spillThresholdRunes is the rune count above which spillover activates.
@@ -35,12 +35,17 @@ const (
 	spillTTL = 24 * time.Hour
 )
 
+// spillDir returns the directory for spilled tool output files.
+// Uses os.TempDir() (/tmp on Linux, %TEMP% on Windows) so that large
+// transient outputs don't accumulate in the user's home directory.
+// The OS (systemd-tmpfiles) periodically cleans /tmp; our own cleanupSpillFiles
+// adds a 24h TTL as an extra safeguard for long-lived sessions.
 func spillDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	tmp := os.TempDir()
+	if tmp == "" {
 		return ""
 	}
-	dir := filepath.Join(home, ".ollama", "cache", "spill")
+	dir := filepath.Join(tmp, "ollama-spill")
 	os.MkdirAll(dir, 0o755)
 	return dir
 }

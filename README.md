@@ -164,7 +164,7 @@ ollama show proxyapi/qwen/qwen3.8-27b   # блок System
 ### Spillover (экономия токенов)
 
 Большие выводы инструментов (>~15k символов) автоматически сохраняются в файл
-`~/.ollama/cache/spill/{hash}.txt`, а в контексте остаётся preview + путь.
+`$TMPDIR/ollama-spill/{hash}.txt` (на Linux: `/tmp/ollama-spill/`), а в контексте остаётся preview + путь.
 Модель решает, читать ли полный вывод через file tool.
 
 ### База знаний (RAG, заготовка)
