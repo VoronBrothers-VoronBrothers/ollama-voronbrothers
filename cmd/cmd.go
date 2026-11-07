@@ -2418,6 +2418,17 @@ Environment Variables:
 	cmd.SetUsageTemplate(cmd.UsageTemplate() + envUsage)
 }
 
+// LaunchModelTUI starts the full bubbletea TUI chat session with the given model.
+// Used by the `lama` launcher binary.
+func LaunchModelTUI(modelName string) error {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if err := checkServerHeartbeat(cmd, nil); err != nil {
+		return fmt.Errorf("server not available: %w", err)
+	}
+	return launchInteractiveModel(cmd, modelName)
+}
+
 func launchInteractiveModel(cmd *cobra.Command, modelName string) error {
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
