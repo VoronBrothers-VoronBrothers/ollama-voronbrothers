@@ -25,7 +25,7 @@ const (
 	defaultCompactionKeepUserTurns       = 3
 	defaultCompactionThreshold           = 0.75 // < 32k context
 	highCtxCompactionThreshold          = 0.85 // 32k–90k context
-	maxCtxCompactionThreshold            = 0.90 // > 90k context
+	maxCtxCompactionThreshold            = 0.93 // > 90k context
 
 	highCtxBoundaryTokens     = 32768  // above this, use highCtx threshold
 	maxCtxBoundaryTokens      = 90112  // above this, use max threshold

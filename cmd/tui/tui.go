@@ -114,11 +114,7 @@ func shouldExpandOthers(state *launch.LauncherState) bool {
 }
 
 func buildMenuItems(state *launch.LauncherState, showOthers bool) []menuItem {
-	items := orderedIntegrationItems(state)
-	if !showOthers && len(items) > launcherMenuLimit {
-		items = append(items[:launcherMenuLimit], othersMenuItem)
-	}
-	return append([]menuItem{runModelMenuItem, knowledgeMenuItem}, items...)
+	return []menuItem{runModelMenuItem, knowledgeMenuItem}
 }
 
 func integrationMenuItem(state launch.LauncherIntegrationState) menuItem {
