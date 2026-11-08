@@ -14,6 +14,31 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
+func TestChatSlashCommandsAreRecognizable(t *testing.T) {
+	// Регрессия 2026-11-08: запись /add без name стала «неизвестной» —
+	// ввод уходил модели как чат, а в автодополнении строка была пустой.
+	seen := map[string]string{}
+	for _, command := range chatSlashCommands {
+		if !strings.HasPrefix(command.name, "/") || strings.TrimSpace(command.name) == "/" {
+			t.Errorf("запись %q: name должно начинаться с «/name»", command.description)
+		}
+		if prev, dup := seen[command.name]; dup {
+			t.Errorf("дублирующееся имя команды: %s (описания: %q и %q)", command.name, prev, command.description)
+		}
+		seen[command.name] = command.description
+		names, _, ok := slashCommandInvocation(command.name)
+		if !ok || names != command.name {
+			t.Errorf("slashCommandInvocation(%s) не распознаёт собственную команду", command.name)
+		}
+		for _, alias := range command.aliases {
+			names, _, ok = slashCommandInvocation(alias)
+			if !ok || names != command.name {
+				t.Errorf("slashCommandInvocation(%s) не приводит алиас к %s", alias, command.name)
+			}
+		}
+	}
+}
+
 func TestChatHelpCommandShowsV1Commands(t *testing.T) {
 	m := chatModel{input: []rune("/help")}
 
