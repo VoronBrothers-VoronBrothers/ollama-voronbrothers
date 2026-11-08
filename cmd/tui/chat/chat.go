@@ -148,7 +148,7 @@ type chatModel struct {
 	selection           chatSelection
 
 	systemPromptDisabled bool
-	attachedDocs         string // /add: concatenated text from attached files (txt, md)
+	attachedDocs         string // /add: concatenated text from attached files (txt, md, pdf)
 
 	width              int
 	height             int

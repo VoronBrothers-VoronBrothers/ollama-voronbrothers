@@ -71,7 +71,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save [filename|path]", description: "save request JSON to ~/.ollama (or explicit path)"},
-	{name: "/add", usage: "/add <paths...>", description: "attach files to context; folders = top-level only", aliases: []string{"/прикрепить"}},
+	{usage: "/add <paths...>", description: "attach files (text/code/PDF) to context; folders = top-level only", aliases: []string{"/прикрепить"}},
 }
 
 var skillsImportCompletions = []chatCompletion{
@@ -390,14 +390,15 @@ func (m *chatModel) handleAddCommand(args string) (tea.Model, tea.Cmd) {
 	totalBytes := 0
 	var skipped []string
 	for _, f := range files {
-		if !isSafeToAttach(f) {
+		ext := strings.ToLower(filepath.Ext(f))
+		if ext != ".pdf" && !isSafeToAttach(f) {
 			skipped = append(skipped, filepath.Base(f))
 			continue // binary / unsupported extension
 		}
-		data, err := os.ReadFile(f)
+		data, err := readAttachData(f)
 		if err != nil {
-			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Не могу прочитать %s: %v", f, err)}))
-			return *m, nil
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", filepath.Base(f), err))
+			continue
 		}
 		formatted, ferr := formatAttachedFile(f, data)
 		if ferr != nil {
@@ -409,7 +410,7 @@ func (m *chatModel) handleAddCommand(args string) (tea.Model, tea.Cmd) {
 	}
 
 	if len(parts) == 0 {
-		msg := "Нет файлов для загрузки. Поддерживаются: код (.go/.py/.js/…), данные (.json/.jsonl/.csv), тексты (.txt/.md/.yaml…)."
+		msg := "Нет файлов для загрузки. Поддерживаются: код (.go/.py/.js/…), данные (.json/.jsonl/.csv), тексты (.txt/.md/.yaml…), PDF (с копируемым текстом)."
 		if len(skipped) > 0 {
 			msg = fmt.Sprintf("Пропущены: %s\n%s", strings.Join(skipped, ", "), msg)
 		}

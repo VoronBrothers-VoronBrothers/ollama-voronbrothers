@@ -2,8 +2,10 @@ package chat
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -38,12 +40,13 @@ var languageByExt = map[string]string{
 	".markdown": "markdown",
 	".txt":      "text",
 	".csv":      "csv",
+	".pdf":      "text",
 	".env":      "text",
 }
 
 var binaryExts = map[string]bool{
 	".exe": true, ".bin": true, ".pyc": true, ".class": true,
-	".pdf": true, ".doc": true, ".docx": true, ".png": true,
+	".doc": true, ".docx": true, ".png": true,
 	".jpg": true, ".jpeg": true, ".webp": true, ".gif": true,
 	".zip": true, ".tar": true, ".gz": true,
 }
@@ -115,6 +118,38 @@ func isSafeToAttach(path string) bool {
 		return false
 	}
 	return true
+}
+
+// extractPDFText достаёт копируемый текст из PDF через pdftotext (poppler-utils).
+func extractPDFText(path string) ([]byte, error) {
+	out, err := exec.Command("pdftotext", path, "-").Output()
+	if err != nil {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return nil, fmt.Errorf("pdftotext не найден (sudo apt install poppler-utils)")
+		case len(out) > 0:
+			// pdftotext иногда стонет в stderr, но текст извлёк — берём его
+		default:
+			return nil, fmt.Errorf("pdftotext: %v", err)
+		}
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil, fmt.Errorf("в PDF нет текстового слоя (скан — нужен OCR)")
+	}
+	return out, nil
+}
+
+// readAttachData читает содержимое файла для /add:
+// PDF через pdftotext, остальное как обычный текст.
+func readAttachData(path string) ([]byte, error) {
+	if strings.ToLower(filepath.Ext(path)) == ".pdf" {
+		return extractPDFText(path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать: %v", err)
+	}
+	return data, nil
 }
 
 // readAndFormatFile читает файл и возвращает отформатированный блок

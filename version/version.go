@@ -28,6 +28,8 @@ func init() {
 		fmt.Fprintln(os.Stderr, "[version] WARNING: стоит встроенная fallback-версия "+Version)
 		fmt.Fprintln(os.Stderr, "[version]         похоже, собирали БЕЗ ldflags -X .../version.Version=...")
 		fmt.Fprintln(os.Stderr, "[version]         именование и сборка — VORON-RUNBOOK.md §3:")
-		fmt.Fprintf(os.Stderr, "[version]         go build -ldflags \"-X github.com/ollama/ollama/version.Version=%s-$(date +%%d%%m%%Y)\" .\n", fallbackVersion[:len(fallbackVersion)-len("-voron")])
+		fmt.Fprintln(os.Stderr, "[version]         РЕКОМЕНДОВАНА СБОРКА ЧЕРЕЗ СКРИПТ: scripts/voron-build.sh (оба бинарника)")
+		fmt.Fprintln(os.Stderr, "[version]         вручную только так:")
+		fmt.Fprintf(os.Stderr, "[version]         go build -tags sqlite_fts5 -ldflags \"-X github.com/ollama/ollama/version.Version=%s-$(date +%%d%%m%%Y)\" .\n", fallbackVersion[:len(fallbackVersion)-len("-voron")])
 	}
 }
