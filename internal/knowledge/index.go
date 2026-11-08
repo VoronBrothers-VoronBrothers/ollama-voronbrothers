@@ -2,9 +2,11 @@ package knowledge
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -38,7 +40,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 // supportedExtensions lists the file types the indexer knows about. Adding a
 // new format = adding an extension here plus (if not plain text) a loader in
 // loadFile.
-var supportedExtensions = []string{".txt", ".md"}
+var supportedExtensions = []string{".txt", ".md", ".pdf"}
 
 // Store is a handle on one knowledge index database.
 type Store struct {
@@ -155,6 +157,27 @@ func collectFiles(dir string) ([]string, error) {
 // loadFile reads a knowledge file and returns its text. The switch is the
 // loader registry for future formats (pdf/docx ...).
 func loadFile(path string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".pdf" {
+		out, err := exec.Command("pdftotext", path, "-").Output()
+		if err != nil {
+			switch {
+			case errors.Is(err, exec.ErrNotFound):
+				return "", fmt.Errorf("pdftotext не найден (sudo apt install poppler-utils)")
+			case len(out) > 0:
+				// pdftotext sometimes warns on stderr but still extracts text
+			default:
+				if len(out) == 0 {
+					return "", fmt.Errorf("pdftotext: %v", err)
+				}
+			}
+		}
+		text := strings.TrimSpace(string(out))
+		if text == "" {
+			return "", fmt.Errorf("в PDF нет текстового слоя (скан — нужен OCR)")
+		}
+		return text, nil
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)

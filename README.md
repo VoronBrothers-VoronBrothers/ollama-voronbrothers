@@ -187,10 +187,11 @@ ollama show proxyapi/qwen/qwen3.8-27b   # блок System
 `$TMPDIR/ollama-spill/{hash}.txt` (на Linux: `/tmp/ollama-spill/`), а в контексте остаётся preview + путь.
 Модель решает, читать ли полный вывод через file tool.
 
-### База знаний (RAG, заготовка)
+### База знаний (RAG)
 
-Каталог `~/.ollama/knowledge/` для документов. Инструмент `knowledge_search`
-реализуется — пока stub. Будущее: BM25-поиск + embedding-модель.
+Каталог `~/.ollama/knowledge/` для документов (`.txt`, `.md`, **`.pdf`** — извлечение через `pdftotext`).
+Инструмент `knowledge_search`: BM25-поиск по чанкам (~500 слов, overlap 10%), хранится в SQLite FTS5.
+TUI: пункт меню «Knowledge base / RAG» → `i` = индексация now, `o` = открыть папку.
 
 Короткие клавиши: `Alt+Enter` — перенос строки; `Shift+Tab` — режим доступа; `Ctrl+O` — детали транскрипта; `↑/↓` — предыдущие промпты.
 
