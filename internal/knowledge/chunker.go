@@ -15,7 +15,7 @@ const (
 	// ChunkOverlapWords is how many trailing words of an emitted piece are
 	// repeated at the start of the next one, so sentences that straddle a
 	// hard boundary remain searchable on both sides (~10% of target).
-	ChunkOverlapWords = 50
+	ChunkOverlapWords = 25
 )
 
 // Chunk is one searchable piece of a knowledge base file.

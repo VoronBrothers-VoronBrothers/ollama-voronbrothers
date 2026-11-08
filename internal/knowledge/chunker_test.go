@@ -119,6 +119,7 @@ func TestIsHeading(t *testing.T) {
 }
 
 func TestIndexAndSearchRoundtrip(t *testing.T) {
+	requireFTS5(t)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "alpha.md"), "# Ollama notes\n\nOllama is a local model runner with an HTTP API.\n")
 	writeFile(t, filepath.Join(dir, "beta.txt"), "The weather in Voronezh today is rainy and cold.\n")
@@ -160,6 +161,7 @@ func TestIndexAndSearchRoundtrip(t *testing.T) {
 }
 
 func TestStatusDetectsStaleness(t *testing.T) {
+	requireFTS5(t)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.md"), "# one\n\ntext here\n")
 	if _, err := Index(dir); err != nil {

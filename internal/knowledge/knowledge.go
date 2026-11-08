@@ -43,7 +43,10 @@ const (
 	MaxChunks = 3
 
 	// ChunkSizeWords is approximate words per chunk during document splitting.
-	ChunkSizeWords = 500
+	// 250 keeps chunks small enough that a single heading section (e.g. a
+	// definition paragraph) fits in one chunk without being diluted by a TOC
+	// or adjacent content. Overlap scales at ~10% (see ChunkOverlapWords).
+	ChunkSizeWords = 250
 )
 
 // Dir returns the absolute path to the knowledge directory, creating it if needed.

@@ -176,6 +176,10 @@ func loadFile(path string) (string, error) {
 		if text == "" {
 			return "", fmt.Errorf("в PDF нет текстового слоя (скан — нужен OCR)")
 		}
+		// Remove table-of-contents sections before chunking: TOC entries
+		// repeat keywords many times in a small area, inflating BM25 scores
+		// for TOC chunks and pushing real content out of top-k results.
+		text = stripTOC(text)
 		return text, nil
 	}
 	b, err := os.ReadFile(path)
@@ -249,6 +253,18 @@ func Index(dir string) (*Status, error) {
 
 // Search runs a BM25 full-text search over the index and returns up to k
 // best matching chunks with their source files.
+//
+// # Extension point: hybrid (BM25 + vector) search
+//
+// When embedding-based retrieval is added, this function will be called by
+// a new HybridSearch() that:
+//  1. Calls Search(dir, query, k*3) for BM25 candidates.
+//  2. Queries the vector store (sqlite-vec) with an embedded query vector.
+//  3. Merges both result sets by union on chunk ID, deduplicates, and
+//     reranks using a combined score: α·BM25 + (1−α)·cosine_similarity.
+//
+// The tool layer (agent/tools/knowledge.go → searchKnowledge) will call
+// HybridSearch instead of Search. Until then, direct BM25 is used.
 func Search(dir string, query string, k int) ([]Result, error) {
 	if k <= 0 {
 		k = 3
@@ -287,14 +303,16 @@ func Search(dir string, query string, k int) ([]Result, error) {
 	return out, rows.Err()
 }
 
-// ftsTokens turns a free-text query into FTS5 match syntax: one double-quoted
-// term per word, implicitly ANDed. Returns nil when nothing is searchable.
+// ftsTokens turns a free-text query into FTS5 match syntax: one prefix-matched
+// term per word, implicitly ANDed. The trailing `*` enables prefix matching so
+// that "гипертенз" also hits "гипертензия", "гипертоническая", etc.
+// Returns nil when nothing is searchable.
 func ftsTokens(query string) []string {
 	var tokens []string
 	var cur strings.Builder
 	flush := func() {
 		if cur.Len() > 0 {
-			tokens = append(tokens, `"`+cur.String()+`"`)
+			tokens = append(tokens, cur.String()+"*")
 			cur.Reset()
 		}
 	}

@@ -75,6 +75,10 @@ func (KnowledgeSearch) Execute(_ context.Context, _ agent.ToolContext, args map[
 
 // searchKnowledge runs a BM25 lookup over the knowledge base, transparently
 // reindexing first when the index lags behind files on disk (lazy reindex).
+//
+// Future: replace the single `knowledge.Search` call with a hybrid path that
+// also queries a local embedding model (via /api/embed) and merges BM25 +
+// vector results. The merge/rerank logic will live in internal/knowledge.
 func searchKnowledge(dir string, query string) (content string, note string, err error) {
 	st, err := knowledge.IndexStatus(dir)
 	if err != nil {

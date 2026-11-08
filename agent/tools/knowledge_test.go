@@ -2,11 +2,13 @@ package tools
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/ollama/ollama/agent"
 )
 
@@ -27,6 +29,21 @@ func runKnowledgeSearch(t *testing.T, query string) string {
 	return res.Content
 }
 
+// requireFTS5Tools skips the test if FTS5 is not available in this SQLite
+// build (i.e. tests run without `-tags fts5`).
+func requireFTS5Tools(t *testing.T) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Skipf("cannot open sqlite: %v", err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE VIRTUAL TABLE t USING fts5(x)`)
+	if err != nil {
+		t.Skipf("FTS5 not available in this SQLite build (run with -tags fts5): %v", err)
+	}
+}
+
 func TestKnowledgeSearchEmptyBase(t *testing.T) {
 	dir := withHome(t)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -39,6 +56,7 @@ func TestKnowledgeSearchEmptyBase(t *testing.T) {
 }
 
 func TestKnowledgeSearchFindsContentAndReindexes(t *testing.T) {
+	requireFTS5Tools(t)
 	dir := withHome(t)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -69,6 +87,7 @@ func TestKnowledgeSearchFindsContentAndReindexes(t *testing.T) {
 }
 
 func TestKnowledgeSearchNoMatch(t *testing.T) {
+	requireFTS5Tools(t)
 	dir := withHome(t)
 	writeKBFile(t, filepath.Join(dir, "a.md"), "# one\n\ntext here\n")
 	out := runKnowledgeSearch(t, "zzzqqq xxx")
