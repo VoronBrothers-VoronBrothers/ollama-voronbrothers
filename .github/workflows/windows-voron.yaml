@@ -35,24 +35,11 @@ jobs:
             MLX_VERSION
             MLX_C_VERSION
 
-      - name: Build llama-server payload (CPU, MSVC)
+      - name: Build llama-server payload (CPU, MSVC) + Go binaries
         shell: powershell
         env:
           VERSION: ${{ env.VERSION }}
-        run: ./scripts/build_windows.ps1 cpu
-
-      # Both entry points from the same commit with our fork tags/flags.
-      # sqlite_fts5 is required for RAG (internal/knowledge).
-      - name: Build ollama.exe + lama.exe
-        shell: powershell
-        env:
-          VERSION: ${{ env.VERSION }}
-        run: |
-          $ld = "-s -w -X=github.com/ollama/ollama/version.Version=$env:VERSION -X=github.com/ollama/ollama/server.mode=release"
-          go build -trimpath -tags sqlite_fts5 -ldflags $ld -o "dist\windows-amd64\ollama.exe" .
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go build -trimpath -tags sqlite_fts5 -ldflags $ld -o "dist\windows-amd64\lama.exe" ./lama/
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: ./scripts/build_windows.ps1 cpu voron
 
       - name: Package zip
         shell: powershell

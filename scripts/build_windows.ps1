@@ -907,6 +907,16 @@ function ollama {
     buildOllamaCLI $script:DIST_DIR
 }
 
+# Voron fork: both entry points with the sqlite_fts5 tag (RAG) from one commit.
+function voron {
+    Write-Output "Building Voron fork binaries (sqlite_fts5): ollama.exe + lama.exe"
+    $ld = "-s -w -X=github.com/ollama/ollama/version.Version=$script:VERSION -X=github.com/ollama/ollama/server.mode=release"
+    & go build -trimpath -tags sqlite_fts5 -ldflags "$ld" -o "${script:DIST_DIR}\ollama.exe" .
+    if ($LASTEXITCODE -ne 0) { exit($LASTEXITCODE)}
+    & go build -trimpath -tags sqlite_fts5 -ldflags "$ld" -o "${script:DIST_DIR}\lama.exe" ./lama/
+    if ($LASTEXITCODE -ne 0) { exit($LASTEXITCODE)}
+}
+
 function ollamaArm64 {
     if (-not $script:WINDOWS_ARM64_CROSS_COMPILE) {
         Write-Output "WARNING: skipping ollamaArm64; Windows ARM64 cross-compiling is disabled due to missing tools"
