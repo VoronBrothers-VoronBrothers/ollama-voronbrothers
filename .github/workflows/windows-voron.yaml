@@ -1,0 +1,67 @@
+# Voron-fork Windows build (lightweight).
+# Triggers on tags v* and manual dispatch with explicit version.
+# Produces dist/windows-amd64: ollama.exe + lama.exe + lib/ollama/llama-server.exe (CPU)
+# and packages it into a zip artifact. No signing, no Inno installer.
+name: windows-voron
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string without leading v, e.g. 0.40.12-voron-09112026'
+        required: true
+        type: string
+
+jobs:
+  build-windows-amd64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        shell: bash
+        run: |
+          V="${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}"
+          echo "VERSION=${V#v}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            LLAMA_CPP_VERSION
+            MLX_VERSION
+            MLX_C_VERSION
+
+      - name: Build llama-server payload (CPU, MSVC)
+        shell: powershell
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: ./scripts/build_windows.ps1 cpu
+
+      # Both entry points from the same commit with our fork tags/flags.
+      # sqlite_fts5 is required for RAG (internal/knowledge).
+      - name: Build ollama.exe + lama.exe
+        shell: powershell
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: |
+          $ld = "-s -w -X=github.com/ollama/ollama/version.Version=$env:VERSION -X=github.com/ollama/ollama/server.mode=release"
+          go build -trimpath -tags sqlite_fts5 -ldflags $ld -o "dist\windows-amd64\ollama.exe" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -tags sqlite_fts5 -ldflags $ld -o "dist\windows-amd64\lama.exe" ./lama/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package zip
+        shell: powershell
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: ./scripts/build_windows.ps1 zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voron-ollama-windows-amd64
+          path: dist/*.zip
+          retention-days: 30

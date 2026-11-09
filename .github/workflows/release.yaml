@@ -1,9 +1,11 @@
 name: release
 
+# Voron fork: upstream release needs APPLE_IDENTITY / GOOGLE_SIGNING_CREDENTIALS
+# secrets we don't have; voron builds go through windows-voron.yaml instead.
 on:
   push:
     tags:
-      - 'v*'
+      - 'upstream-v*'
 
 env:
   CGO_CFLAGS: '-O3'
