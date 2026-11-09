@@ -9,8 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 type Prompt struct {
@@ -87,8 +85,7 @@ func (i *Instance) Readline() (string, error) {
 	autoSendActive := i.AutoSendDuration > 0 && IsTerminal(fdl)
 	var oldFl int = -1
 	if autoSendActive {
-		oldFl, _ = unix.FcntlInt(fdl, unix.F_GETFL, 0)
-		_, _ = unix.FcntlInt(fdl, unix.F_SETFL, oldFl|unix.O_NONBLOCK)
+		oldFl = setStdinNonBlocking(fdl)
 	}
 	i.lastChangeTime = time.Now()
 
@@ -102,7 +99,7 @@ func (i *Instance) Readline() (string, error) {
 	defer func() {
 		fd := os.Stdin.Fd()
 		if autoSendActive && oldFl >= 0 {
-			_, _ = unix.FcntlInt(fd, unix.F_SETFL, oldFl)
+			restoreStdinFlags(fd, oldFl)
 		}
 		//nolint:errcheck
 		UnsetRawMode(fd, i.Terminal.termios)
