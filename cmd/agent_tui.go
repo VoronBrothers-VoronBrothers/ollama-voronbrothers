@@ -17,6 +17,7 @@ import (
 	mcps "github.com/ollama/ollama/agent/mcps"
 	agenttools "github.com/ollama/ollama/agent/tools"
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/cmd/config"
 	"github.com/ollama/ollama/cmd/launch"
 	agentchat "github.com/ollama/ollama/cmd/tui/chat"
@@ -282,7 +283,7 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	}
 
 	registry := &coreagent.Registry{}
-	if os.Getenv("OLLAMA_AGENT_DISABLE_SHELL") == "" {
+	if envconfig.Var("OLLAMA_AGENT_DISABLE_SHELL") == "" {
 		registry.Register(&agenttools.Bash{})
 		registry.Register(agenttools.NewBashLong())
 	}
@@ -299,7 +300,7 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 		registry.Register(&agenttools.Skill{Catalog: skillCatalog})
 	}
 
-	if os.Getenv("OLLAMA_AGENT_DISABLE_WEBSEARCH") == "" {
+	if envconfig.Var("OLLAMA_AGENT_DISABLE_WEBSEARCH") == "" {
 		if disabled, known := agentCloudStatusDisabled(ctx, client); !known || !disabled {
 			registry.Register(&agenttools.WebSearch{})
 			registry.Register(&agenttools.WebFetch{})

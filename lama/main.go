@@ -10,12 +10,13 @@ import (
 	"os"
 
 	"github.com/ollama/ollama/cmd"
+	"github.com/ollama/ollama/envconfig"
 )
 
 const defaultModel = "ollama-model"
 
 func main() {
-	model := os.Getenv("LAMA_MODEL")
+	model := envconfig.Var("LAMA_MODEL")
 	if model == "" {
 		model = defaultModel
 	}

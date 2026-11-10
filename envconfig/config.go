@@ -377,9 +377,70 @@ func Values() map[string]string {
 	return vals
 }
 
-// Var returns an environment variable stripped of leading and trailing quotes or spaces
+// envFileOnce caches the parsed env files for the process lifetime.
+var (
+	envFilesOnce sync.Once
+	envFilesMap  map[string]string
+)
+
+// envFileDirs is the list of directories scanned for an `env` file (system-wide).
+// Overridable in tests via setEnvFileDirsForTest.
+var envFileDirs = []string{filepath.Join("/etc", "ollama")}
+
+func setEnvFileDirsForTest(dirs ...string) {
+	envFileDirs = dirs
+	resetCacheForTest()
+}
+
+// loadEnvFiles parses KEY=VALUE config files used as a fallback for
+// processes not started by systemd (TUI / lama). Priority: user file wins
+// over system file. Lines: blank and '#'-prefixed are ignored, no inline
+// comments. Values keep their quotes stripped like process env vars.
+func loadEnvFiles() map[string]string {
+	var paths []string
+	for _, d := range envFileDirs {
+		paths = append(paths, filepath.Join(d, "env"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".ollama", "env"))
+	}
+	m := make(map[string]string)
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			k, v, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			m[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), "\"'")
+		}
+	}
+	return m // later files (user) overwrite earlier ones (system)
+}
+
+// resetCacheForTest clears the cached env files (tests only).
+func resetCacheForTest() {
+	envFilesOnce = sync.Once{}
+	envFilesMap = nil
+}
+
+// Var returns an environment variable stripped of leading and trailing quotes or spaces.
+// If the variable is not set in the process environment, it falls back to the
+// config files /etc/ollama/env and ~/.ollama/env so that TUI/lama processes
+// started outside systemd see the same settings as `ollama serve`.
 func Var(key string) string {
-	return strings.Trim(strings.TrimSpace(os.Getenv(key)), "\"'")
+	if v := strings.Trim(strings.TrimSpace(os.Getenv(key)), "\"'"); v != "" {
+		return v
+	}
+	envFilesOnce.Do(func() { envFilesMap = loadEnvFiles() })
+	return envFilesMap[key]
 }
 
 // serverConfigData holds the parsed fields from ~/.ollama/server.json.
