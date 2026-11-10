@@ -824,6 +824,13 @@ func hasListedModelName(models []api.ListModelResponse, name string) bool {
 	return false
 }
 
+// isRemoteModelName returns true for models that are routed to external APIs
+// and have no local manifest to query via Show(). Only proxyapi/ models qualify;
+// :cloud models still go through Show() for auth checks.
+func isRemoteModelName(name string) bool {
+	return strings.HasPrefix(name, "proxyapi/")
+}
+
 // showOrPullModel returns model info for name, pulling the model if it isn't
 // available locally. If the pull finds no default tag but a ":cloud" tag
 // exists, the user may be offered the cloud model instead (see
@@ -960,12 +967,23 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	info, name, err := showOrPullModel(cmd, client, args[0], opts.Runner, insecure, "run")
-	if err != nil {
-		if handleCloudAuthorizationError(err) {
-			return nil
+	var info *api.ShowResponse
+	name := args[0]
+	if isRemoteModelName(args[0]) {
+		// Proxy and cloud models have no local manifest — skip Show() and
+		// assume basic chat capabilities. The server routes requests directly.
+		info = &api.ShowResponse{
+			Capabilities: []model.Capability{model.CapabilityCompletion},
 		}
-		return err
+	} else {
+		var showErr error
+		info, name, showErr = showOrPullModel(cmd, client, args[0], opts.Runner, insecure, "run")
+		if showErr != nil {
+			if handleCloudAuthorizationError(showErr) {
+				return nil
+			}
+			return showErr
+		}
 	}
 	// The model may have been resolved to a different name (e.g. its ":cloud"
 	// variant), so make sure downstream requests use it.
@@ -1076,6 +1094,18 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 
 		return generateInteractive(cmd, opts)
 	}
+
+	// One-shot mode: remote/proxy models need Chat API (not Generate API).
+	if isRemoteModelName(opts.Model) {
+		if err := generateOneShotChat(cmd, opts); err != nil {
+			if handleCloudAuthorizationError(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+
 	if err := generate(cmd, opts); err != nil {
 		if handleCloudAuthorizationError(err) {
 			return nil
@@ -2169,6 +2199,66 @@ func chat(cmd *cobra.Command, opts runOptions) (*api.Message, error) {
 	}
 
 	return &api.Message{Role: role, Thinking: thinkingContent.String(), Content: fullResponse.String()}, nil
+}
+
+// generateOneShotChat performs a single Chat API call for remote/proxy models
+// and prints the response. Unlike generate(), it uses /api/chat which is
+// required by proxy and cloud model backends.
+func generateOneShotChat(cmd *cobra.Command, opts runOptions) error {
+	client, err := api.ClientFromEnvironment()
+	if err != nil {
+		return err
+	}
+
+	p := progress.NewProgress(os.Stderr)
+	defer p.StopAndClear()
+
+	spinner := progress.NewSpinner("")
+	p.Add("", spinner)
+
+	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	plainText := !term.IsTerminal(int(os.Stdout.Fd()))
+	state := &displayResponseState{}
+
+	fn := func(response api.ChatResponse) error {
+		content := response.Message.Content
+		if content != "" {
+			p.StopAndClear()
+		}
+		displayResponse(content, opts.WordWrap || !plainText, state)
+		return nil
+	}
+
+	req := &api.ChatRequest{
+		Model:    opts.Model,
+		Runner:   opts.Runner,
+		Messages: []api.Message{{Role: "user", Content: opts.Prompt}},
+		Format:   json.RawMessage(opts.Format),
+		Options:  opts.Options,
+		Think:    opts.Think,
+	}
+	if opts.KeepAlive != nil {
+		req.KeepAlive = opts.KeepAlive
+	}
+
+	if err := client.Chat(ctx, req, fn); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
+
+	fmt.Println()
+	return nil
 }
 
 func generate(cmd *cobra.Command, opts runOptions) error {

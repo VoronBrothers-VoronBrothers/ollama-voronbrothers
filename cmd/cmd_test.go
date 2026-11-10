@@ -3410,3 +3410,130 @@ func TestFormerAgentEntryPointsAreRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestIsRemoteModelName(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  bool
+	}{
+		{"proxyapi prefix", "proxyapi/perplexity/sonar", true},
+		{"proxyapi deepseek", "proxyapi/deepseek/deepseek-v4.1-flash-1017", true},
+		{"cloud source goes through Show", "gemma4:31b-cloud", false},
+		{"beam cloud goes through Show", "beam:cloud", false},
+		{"local model", "lama:latest", false},
+		{"local model no tag", "my-model", false},
+		{"empty string", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRemoteModelName(tt.model); got != tt.want {
+				t.Errorf("isRemoteModelName(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunPipedProxyModelUsesChatAPI(t *testing.T) {
+	text := "Four"
+	chatCalled := false
+	generateCalled := false
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/chat":
+			chatCalled = true
+			json.NewEncoder(w).Encode(api.ChatResponse{
+				Message: api.Message{Role: "assistant", Content: text},
+				Done:    true,
+			})
+		case "/api/generate":
+			generateCalled = true
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Setenv("OLLAMA_HOST", mockServer.URL)
+	t.Cleanup(mockServer.Close)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	for _, f := range []string{"keepalive", "format", "think", "voice"} {
+		cmd.Flags().String(f, "", "")
+	}
+	for _, f := range []string{"verbose", "insecure", "nowordwrap", "hidethinking"} {
+		cmd.Flags().Bool(f, false, "")
+	}
+
+	var err error
+	out := captureStdout(t, func() {
+		err = RunHandler(cmd, []string{"proxyapi/perplexity/sonar", "What is 2+2?"})
+	})
+	if err != nil {
+		t.Fatalf("RunHandler returned error: %v", err)
+	}
+
+	if !chatCalled {
+		t.Error("/api/chat was not called for proxy model")
+	}
+	if generateCalled {
+		t.Error("/api/generate should NOT be called for proxy model")
+	}
+	if strings.TrimSpace(out) != text {
+		t.Fatalf("output %q, want %q", out, text)
+	}
+}
+
+func TestRunPipedLocalModelUsesGenerateAPI(t *testing.T) {
+	text := "Hello from local model"
+	chatCalled := false
+	generateCalled := false
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/show":
+			json.NewEncoder(w).Encode(api.ShowResponse{Capabilities: []model.Capability{model.CapabilityCompletion}})
+		case "/api/generate":
+			generateCalled = true
+			for _, word := range strings.SplitAfter(text, " ") {
+				json.NewEncoder(w).Encode(api.GenerateResponse{Response: word})
+			}
+			json.NewEncoder(w).Encode(api.GenerateResponse{Done: true})
+		case "/api/chat":
+			chatCalled = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Setenv("OLLAMA_HOST", mockServer.URL)
+	t.Cleanup(mockServer.Close)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	for _, f := range []string{"keepalive", "format", "think", "voice"} {
+		cmd.Flags().String(f, "", "")
+	}
+	for _, f := range []string{"verbose", "insecure", "nowordwrap", "hidethinking"} {
+		cmd.Flags().Bool(f, false, "")
+	}
+
+	var err error
+	out := captureStdout(t, func() {
+		err = RunHandler(cmd, []string{"local-model", "Say hi"})
+	})
+	if err != nil {
+		t.Fatalf("RunHandler returned error: %v", err)
+	}
+
+	if !generateCalled {
+		t.Error("/api/generate was not called for local model")
+	}
+	if chatCalled {
+		t.Error("/api/chat should NOT be called for local model in one-shot mode")
+	}
+	if strings.TrimSpace(out) != text {
+		t.Fatalf("output %q, want %q", out, text)
+	}
+}
