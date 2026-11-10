@@ -100,7 +100,7 @@ func parserNameForModel(m *Model) string {
 }
 
 func experimentEnabled(name string) bool {
-	return slices.Contains(strings.Split(os.Getenv("OLLAMA_EXPERIMENT"), ","), name)
+	return slices.Contains(strings.Split(envconfig.Var("OLLAMA_EXPERIMENT"), ","), name)
 }
 
 var useClient2 = experimentEnabled("client2")

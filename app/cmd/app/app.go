@@ -29,6 +29,7 @@ import (
 	"github.com/ollama/ollama/app/tools"
 	"github.com/ollama/ollama/app/ui"
 	"github.com/ollama/ollama/app/updater"
+	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/app/version"
 )
 
@@ -38,7 +39,7 @@ var (
 	appStore     *store.Store
 )
 
-var debug = strings.EqualFold(os.Getenv("OLLAMA_DEBUG"), "true") || os.Getenv("OLLAMA_DEBUG") == "1"
+var debug = strings.EqualFold(envconfig.Var("OLLAMA_DEBUG"), "true") || envconfig.Var("OLLAMA_DEBUG") == "1"
 
 var (
 	fastStartup = false
