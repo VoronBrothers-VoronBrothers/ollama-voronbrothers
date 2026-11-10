@@ -141,7 +141,7 @@ func (m chatModel) renderPromptDebug(width, height int) string {
 
 	header := []string{
 		chatPickerTitleStyle.Render("Prompt"),
-		chatPickerMetaStyle.Render("full request preview • /save <filename> saved as <filename>.json"),
+		chatPickerMetaStyle.Render("full request preview • /save <filename> saved as ~/.ollama/chats/<filename>.json"),
 		"",
 	}
 	footer := chatPickerMetaStyle.Render("↑/↓ scroll • pgup/pgdn page • enter/esc close")
@@ -566,10 +566,10 @@ func promptMessageLabel(msg api.Message) string {
 	return msg.Role
 }
 
-// saveHomeDir returns ~/.ollama.
+// saveHomeDir returns ~/.ollama/chats.
 func saveHomeDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ollama")
+	return filepath.Join(home, ".ollama", "chats")
 }
 
 // isExplicitSavePath reports whether args looks like a path rather than a bare name.
