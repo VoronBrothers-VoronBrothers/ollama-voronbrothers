@@ -20,7 +20,7 @@ func TestClientFromEnvironment(t *testing.T) {
 	}
 
 	testCases := map[string]*testCase{
-		"empty":                      {value: "", expect: "http://127.0.0.1:11434"},
+		"default":                    {value: "127.0.0.1:11434", expect: "http://127.0.0.1:11434"},
 		"only address":               {value: "1.2.3.4", expect: "http://1.2.3.4:11434"},
 		"only port":                  {value: ":1234", expect: "http://:1234"},
 		"address and port":           {value: "1.2.3.4:1234", expect: "http://1.2.3.4:1234"},
@@ -39,6 +39,7 @@ func TestClientFromEnvironment(t *testing.T) {
 	for k, v := range testCases {
 		t.Run(k, func(t *testing.T) {
 			t.Setenv("OLLAMA_HOST", v.value)
+			t.Setenv("OLLAMA_URL", v.value)
 
 			client, err := ClientFromEnvironment()
 			if err != v.err {
