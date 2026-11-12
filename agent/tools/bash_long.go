@@ -8,7 +8,9 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
-const bashLongToolName = "bash_long"
+// bashLongName returns the platform-appropriate tool name:
+// "bash_long" on Unix, "powershell_long" on Windows.
+func bashLongName() string { return shellToolName() + "_long" }
 
 // Per-call bounds for the optional `timeout` argument of bash_long.
 // When the argument is absent (or non-positive) the default bashLongTimeout
@@ -34,7 +36,7 @@ func NewBashLong() *BashLong {
 }
 
 func (b *BashLong) Name() string {
-	return bashLongToolName
+	return bashLongName()
 }
 
 // Execute runs the embedded Bash with a per-call timeout taken from the optional
