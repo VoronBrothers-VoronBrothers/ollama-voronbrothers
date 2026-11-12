@@ -11,8 +11,41 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
-BIN=/usr/local/bin
+BIN="${BIN:-/usr/local/bin}"   # переопределяемо для тестов
 die() { echo "❌ $*" >&2; exit 1; }
+
+# --- вспомогательные функции (нужны и режиму --fix-backup-names) ---
+# Самый свежий бэкап = самый новый по mtime (в имени есть версия и номер,
+# поэтому сортировка по строке ненадёжна).
+latest_bak() { ls -1t "$BIN"/$1-*.bak 2>/dev/null | head -n1 || true; }
+
+# real_version <путь к бинарнику или .bak> -> версия, вшитая ldflags ("", если нет).
+# Читаем из самого файла, а не из имени: имя могло достаться от прошлой сборки.
+real_version() {
+    [ -f "$1" ] || return 0
+    strings -a "$1" 2>/dev/null \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-voron-[0-9]{8}' \
+        | sort -u | tail -n1 || true
+}
+
+# strip_bak <имя файла> <префикс> -> "<версия>" из имени (без .bak и номера дубля)
+strip_bak() {
+    local base ver
+    base=$(basename "$1" .bak)
+    ver=${base#"$2"-}
+    printf '%s' "$ver" | sed -E 's/-[0-9]+$//'
+}
+
+# backup_path <name> <version> — свободное имя бэкапа:
+#   <name>-<version>.bak, затем <name>-<version>-2.bak, -3.bak, ...
+backup_path() {
+    local name="$1" ver="$2" n=1 path
+    while :; do
+        if [ "$n" -eq 1 ]; then path="$BIN/$name-$ver.bak"; else path="$BIN/$name-$ver-$n.bak"; fi
+        [ -e "$path" ] || { printf '%s' "$path"; return; }
+        n=$((n + 1))
+    done
+}
 
 # --- sudo: нужен только на этапе установки ---
 SUDO=""
@@ -22,11 +55,34 @@ if [ "$(id -u)" != 0 ]; then
     fi
 fi
 
-# --- Версия по ранбуку §2 ---
-latest_bak() { ls -1 "$BIN"/$1-*.bak 2>/dev/null | sort | tail -n1 || true; }
+# --- режим: починить имена существующих бэкапов (-dup-HHMM → -2, -3, …) ---
+if [ "${1:-}" = "--fix-backup-names" ]; then
+    for f in "$BIN"/*-*.bak; do
+        [ -e "$f" ] || continue
+        name=""
+        base=$(basename "$f" .bak)
+        for cand in ollama lama; do
+            case "$base" in "$cand"-*) name="$cand" ;; esac
+        done
+        [ -n "$name" ] || { echo "skip $base (неизвестный префикс)"; continue; }
 
-prev_ollama=$(basename "$(latest_bak ollama)" .bak 2>/dev/null | sed 's/^ollama-//' || true)
-prev_lama=$(basename   "$(latest_bak lama)"   .bak 2>/dev/null | sed 's/^lama-//'   || true)
+        ver=$(real_version "$f")
+        if [ -z "$ver" ]; then
+            ver=$(printf '%s' "$base" | sed -E "s/^$name-//; s/(-dup-[0-9]+|[0-9]+)$//; s/-$//")
+            echo "⚠️  $base: версия не найдена в файле, беру из имени: $ver"
+        fi
+
+        newf=$(backup_path "$name" "$ver")
+
+        if [ "$newf" = "$f" ]; then echo "ok $base"; continue; fi
+        $SUDO mv "$f" "$newf" && echo "✅ $base → $(basename "$newf")"
+    done
+    exit 0
+fi
+
+# --- Версия по ранбуку §2 ---
+prev_ollama=$(real_version "$BIN/ollama"); [ -n "$prev_ollama" ] || prev_ollama=$(strip_bak "$(latest_bak ollama)" ollama)
+prev_lama=$(real_version   "$BIN/lama");   [ -n "$prev_lama" ]   || prev_lama=$(strip_bak   "$(latest_bak lama)"   lama)
 
 new_base="${1:-${prev_ollama%%-voron*}}"
 [ -n "$new_base" ] || die "не удалось определить версию: передай базу аргументом, например scripts/voron-build.sh 0.41.0"
@@ -54,12 +110,11 @@ go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version
 install_one() { # $1 = имя файла в /usr/local/bin
     local name="$1" bak prev dst
     dst="$BIN/$name"
-    prev=$(basename "$(latest_bak "$name")" .bak 2>/dev/null | sed "s/^$name-//" || true)
     [ -f "$dst" ] || die "$dst не найден — ставь вручную (первый раз)"
+    prev=$(real_version "$dst"); [ -n "$prev" ] || prev=$(strip_bak "$(latest_bak "$name")" "$name")
 
     if [ -n "$prev" ]; then
-        bak="$BIN/$name-$prev.bak"
-        [ -e "$bak" ] && bak="${bak%.bak}-dup-$(date +%H%M).bak"   # бэкап этой версии уже есть — не затираем
+        bak=$(backup_path "$name" "$prev")
         $SUDO cp "$dst" "$bak" || die "бэкап $name → $(basename "$bak")"
     else
         echo "⚠️  для $name нет прежнего бэкапа — первый .bak появится только после этой замены"

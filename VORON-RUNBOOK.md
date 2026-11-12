@@ -6,7 +6,7 @@
 |---|---|
 | `/usr/local/bin/ollama` | Основной бинарник: сервер (`serve`) + CLI/TUI (chat, `/add`, RAG и т.д.) |
 | `/usr/local/bin/lama` | Быстрый запуск TUI: `lama [MODEL] [PROMPT...]`. Модель берётся из env `LAMA_MODEL`, иначе первый аргумент, fallback `ollama-model`. Entry point — `./lama/` в репо. |
-| `/usr/local/bin/*.bak` | Бэкапы старых бинарников с именем версии (откат) |
+| `/usr/local/bin/*.bak` | Бэкапы старых бинарников: `ollama-<версия>.bak`, при повторе — `-2.bak`, `-3.bak` (откат) |
 | `/etc/systemd/system/ollama.service` | Сервер (User=ollama, Restart=always); env — через `EnvironmentFile=` + LD_LIBRARY_PATH |
 | `/etc/ollama/env` | **Единая конфигурация** всех переменных (serve и TUI), см. §6 |
 | `/usr/local/lib/ollama/{cuda_v13,cuda_v12,vulkan}` | Библиотеки llama.cpp для 5060 Ti (sm_120 — только в cuda_v13, она ПЕРВАЯ в LD_LIBRARY_PATH) |
@@ -52,7 +52,12 @@ sudo cp /usr/local/bin/lama   "/usr/local/bin/lama-$(lama-old-version).bak"   &&
 Важно:
 - **`mv`, а не `cp`** — на занятом бинарнике cp даёт «Текстовый файл занят». `mv` атомарно меняет inode; текущие процессы (сервер, TUI) продолжают работать со старым inode без перезапуска.
 - **ldflags обязателен** — без него клиент ругается «client version is 0.0.0».
-- **Бэкап перед заменой каждого файла**, имя = полная версия с уехавшего бинарника.
+- **Бэкап перед заменой каждого файла**, имя = полная версия, **вшитая в сам файл**
+  (`strings binary | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-voron-[0-9]{8}'`), а не взятая из имени.
+  Если бэкап этой версии уже есть — добавляется номер: `ollama-<версия>-2.bak`, `-3.bak`, …
+  (старый вариант `-dup-HHMM` упразднён: имена раздувались до нечитаемых).
+- **Починить имена старых бэкапов**: `scripts/voron-build.sh --fix-backup-names`
+  (мигрирует `-dup-HHMM`-имена в нумерацию, версию берёт из самого файла).
 - **CGO: нужен** (go-sqlite3, x/mlxrunner — mlx-c из хедеров репо). `CGO_ENABLED=0` упадёт на `x/mlxrunner`. Go: apt `golang-go` (1.26).
 - Сервер (`ollama serve`) и TUI перезапускать после замены **не обязательно**: следующий старт подхватит новый бинарник. Для TUI — обычный self-restart / новое окно konsole.
 
@@ -72,6 +77,8 @@ ls -la /usr/local/bin/ollama* /usr/local/bin/lama*   # бэкапы + разме
 
 ```bash
 # любой из бинарников обратно на записанный бэкап:
+# <версия> — та, что вшита в бэкап; номер суффикса (-2/-3) смотри в ls:
+ls -1t /usr/local/bin/ollama-*.bak /usr/local/bin/lama-*.bak
 sudo cp /usr/local/bin/ollama-<версия>.bak /usr/local/bin/ollama && sudo chmod 755 /usr/local/bin/ollama
 sudo cp /usr/local/bin/lama-<версия>.bak   /usr/local/bin/lama   && sudo chmod 755 /usr/local/bin/lama
 ```
