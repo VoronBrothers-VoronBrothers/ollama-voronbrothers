@@ -81,7 +81,7 @@ type serviceItem struct {
 var serviceMenuItems = []serviceItem{
 	{
 		title:       "Recreate env vars (~/.ollama/env)",
-		description: "Full env reference; overrides /etc/ollama/env. All lines commented out.",
+		description: "Writes full env reference to ~/.ollama/env (user priority over /etc). All lines commented out.",
 	},
 }
 
