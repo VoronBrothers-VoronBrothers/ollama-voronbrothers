@@ -95,6 +95,8 @@ func integrationSequence(items []menuItem) []string {
 			sequence = append(sequence, "run")
 		case item.isKnowledge:
 			sequence = append(sequence, "kb")
+		case item.isService:
+			sequence = append(sequence, "service")
 		case item.isOthers:
 			sequence = append(sequence, "more")
 		case item.integration != "":
@@ -158,7 +160,7 @@ func TestMenuRemembersPromotedAppWithoutOpeningMore(t *testing.T) {
 
 func TestMenuWithoutAppsOnlyOffersChatAndKB(t *testing.T) {
 	menu := newModel(nil)
-	if diff := compareStrings(integrationSequence(menu.items), []string{"run", "kb"}); diff != "" {
+	if diff := compareStrings(integrationSequence(menu.items), []string{"run", "kb", "service"}); diff != "" {
 		t.Fatalf("menu without apps should only offer chat and kb: %s", diff)
 	}
 	if view := menu.View(); !strings.Contains(view, "Chat with a model") {

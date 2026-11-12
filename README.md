@@ -188,6 +188,12 @@ ollama show proxyapi/qwen/qwen3.8-27b   # блок System
 `$TMPDIR/ollama-spill/{hash}.txt` (на Linux: `/tmp/ollama-spill/`), а в контексте остаётся preview + путь.
 Модель решает, читать ли полный вывод через file tool.
 
+### Служебное (Service tools)
+
+TUI: пункт меню «Служебное» — раздел сервисных операций.
+Подпункты:
+- **Recreate env vars (~/.ollama/env)** — пересоздаёт пользовательский файл окружения с задокументированными значениями по умолчанию. Подтверждение y/n перед перезаписью. Не требует sudo (пишет в `$HOME/.ollama/env`).
+
 ### База знаний (RAG)
 
 Каталог `~/.ollama/knowledge/` для документов (`.txt`, `.md`, **`.pdf`** — извлечение через `pdftotext`).
