@@ -127,22 +127,10 @@ func shouldExpandOthers(state *launch.LauncherState) bool {
 }
 
 func buildMenuItems(state *launch.LauncherState, showOthers bool) []menuItem {
-	ordered := orderedIntegrationItems(state)
-
-	if len(ordered) == 0 {
-		// No integrations registered → fill the slot with service tools.
-		return []menuItem{runModelMenuItem, knowledgeMenuItem, serviceMenuItem}
-	}
-
-	items := []menuItem{runModelMenuItem, knowledgeMenuItem}
-	limit := launcherMenuLimit
-	if showOthers || limit >= len(ordered) {
-		items = append(items, ordered...)
-	} else {
-		items = append(items, ordered[:limit]...)
-		items = append(items, othersMenuItem)
-	}
-	return items
+	// Fixed 3-item menu (old releases): Chat / Knowledge base-RAG / Служебное.
+	// Upstream launch integrations (Claude Code, Qwen Code, etc.) are NOT shown
+	// in the top-level TUI menu — they stay reachable via `ollama launch` CLI only.
+	return []menuItem{runModelMenuItem, knowledgeMenuItem, serviceMenuItem}
 }
 
 func integrationMenuItem(state launch.LauncherIntegrationState) menuItem {
