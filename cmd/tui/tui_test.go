@@ -78,15 +78,6 @@ func launcherTestState() *launch.LauncherState {
 	}
 }
 
-func findMenuCursorByIntegration(items []menuItem, name string) int {
-	for i, item := range items {
-		if item.integration == name {
-			return i
-		}
-	}
-	return -1
-}
-
 func integrationSequence(items []menuItem) []string {
 	sequence := make([]string, 0, len(items))
 	for _, item := range items {
@@ -110,58 +101,10 @@ func compareStrings(got, want []string) string {
 	return cmp.Diff(want, got)
 }
 
-// The menu always starts with [run, kb], then up to launcherMenuLimit integrations, then More.
-
-func TestMenuPromotesInstalledAppsInDefaultPriorityOrder(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		installed    []string
-		want         []string
-		wantOverflow []string
-	}{
-		{"none installed", nil, []string{"run", "kb", "claude", "opencode", "hermes", "openclaw", "more"}, []string{"codex", "droid", "pi"}},
-		{"only OpenClaw", []string{"openclaw"}, []string{"run", "kb", "openclaw", "claude", "opencode", "hermes", "more"}, []string{"codex", "droid", "pi"}},
-		{"installed primary and additional apps", []string{"pi", "codex", "openclaw"}, []string{"run", "kb", "openclaw", "codex", "pi", "claude", "more"}, []string{"opencode", "hermes", "droid"}},
-		{"more than four installed", []string{"pi", "droid", "codex", "openclaw", "hermes", "opencode"}, []string{"run", "kb", "opencode", "hermes", "openclaw", "codex", "more"}, []string{"droid", "pi", "claude"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			state := launcherTestState()
-			delete(state.Integrations, "chatgpt")
-			for _, name := range tc.installed {
-				app := state.Integrations[name]
-				app.Installed = true
-				state.Integrations[name] = app
-			}
-			menu := newModel(state)
-			if diff := compareStrings(integrationSequence(menu.items), tc.want); diff != "" {
-				t.Fatalf("wrong installed-first order: %s", diff)
-			}
-			expanded := buildMenuItems(state, true)
-			// offset: 2 fixed items (run+kb) + launcherMenuLimit
-			if diff := compareStrings(integrationSequence(expanded[2+launcherMenuLimit:]), tc.wantOverflow); diff != "" {
-				t.Fatalf("remaining apps should stay under More in priority order: %s", diff)
-			}
-		})
-	}
-}
-
-func TestMenuRemembersPromotedAppWithoutOpeningMore(t *testing.T) {
-	state := launcherTestState()
-	app := state.Integrations["codex"]
-	app.Installed = true
-	state.Integrations["codex"] = app
-	state.LastSelection = "codex"
-	menu := newModel(state)
-	// codex is at position 2 (after run+kb), promoted to first integration slot
-	if menu.showOthers || menu.cursor != 2 || menu.items[menu.cursor].integration != "codex" {
-		t.Fatal("previously selected installed app should be recalled in its promoted position")
-	}
-}
-
-func TestMenuWithoutAppsOnlyOffersChatAndKB(t *testing.T) {
+func TestMenuHasExactlyThreeFixedItems(t *testing.T) {
 	menu := newModel(nil)
 	if diff := compareStrings(integrationSequence(menu.items), []string{"run", "kb", "service"}); diff != "" {
-		t.Fatalf("menu without apps should only offer chat and kb: %s", diff)
+		t.Fatalf("menu must be exactly chat + knowledge + service: %s", diff)
 	}
 	if view := menu.View(); !strings.Contains(view, "Chat with a model") {
 		t.Fatalf("expected chat item in view\n%s", view)
@@ -172,74 +115,6 @@ func TestMenuWithoutAppsOnlyOffersChatAndKB(t *testing.T) {
 	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if got := updated.(model); !got.selected || got.action != (TUIAction{Kind: TUIActionRunModel}) {
 		t.Fatalf("enter should start a chat, got selected=%v action=%v", got.selected, got.action)
-	}
-}
-
-func TestMenuUpToFourAppsDoesNotNeedMore(t *testing.T) {
-	for _, names := range [][]string{
-		{"claude", "opencode", "hermes"},
-		{"claude", "opencode", "hermes", "openclaw"},
-	} {
-		state := launcherTestState()
-		apps := make(map[string]launch.LauncherIntegrationState)
-		for _, name := range names {
-			apps[name] = state.Integrations[name]
-		}
-		state.Integrations = apps
-		menu := newModel(state)
-		want := append([]string{"run", "kb"}, names...)
-		if diff := compareStrings(integrationSequence(menu.items), want); diff != "" {
-			t.Fatalf("up to four apps should appear directly without More: %s", diff)
-		}
-	}
-}
-
-func TestMenuExpandsAndCollapsesMoreAfterPromotion(t *testing.T) {
-	state := launcherTestState()
-	app := state.Integrations["codex"]
-	app.Installed = true
-	state.Integrations["codex"] = app
-	menu := newModel(state)
-	// More is at position 2 + launcherMenuLimit (after run+kb + 4 apps); set cursor to last app before it.
-	lastPrimaryIdx := 2 + launcherMenuLimit - 1 // index of 4th integration
-	menu.cursor = lastPrimaryIdx
-	root := integrationSequence(menu.items)
-
-	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyDown})
-	expanded := updated.(model)
-	if !expanded.showOthers || expanded.cursor != lastPrimaryIdx+1 || expanded.items[expanded.cursor].integration == "" {
-		t.Fatal("Down must expand More and select the first overflow app")
-	}
-	updated, _ = expanded.Update(tea.KeyMsg{Type: tea.KeyUp})
-	collapsed := updated.(model)
-	if collapsed.showOthers || collapsed.cursor != lastPrimaryIdx {
-		t.Fatal("Up must return to the last primary app")
-	}
-	if diff := compareStrings(integrationSequence(collapsed.items), root); diff != "" {
-		t.Fatalf("collapsing More changed the promoted root menu: %s", diff)
-	}
-}
-
-func TestMenuStartsExpandedForPreviousOverflowSelection(t *testing.T) {
-	state := launcherTestState()
-	fullItems := buildMenuItems(state, true)
-	overflow := fullItems[2+launcherMenuLimit:] // skip run+kb + limit apps
-	if len(overflow) < 2 {
-		t.Fatal("expected at least two additional integrations")
-	}
-	state.LastSelection = overflow[1].integration
-
-	menu := newModel(state)
-	if !menu.showOthers {
-		t.Fatal("expected previous additional integration selection to start expanded")
-	}
-	if got := menu.items[menu.cursor].integration; got != state.LastSelection {
-		t.Fatalf("initial cursor integration = %q, want %q", got, state.LastSelection)
-	}
-	for _, item := range menu.items {
-		if item.isOthers {
-			t.Fatal("expanded menu must contain apps instead of More")
-		}
 	}
 }
 
@@ -282,12 +157,19 @@ func TestMenuTabOnRunSelectsChangeRun(t *testing.T) {
 	}
 }
 
+// withIntegrationItem appends an integration entry to the menu and puts the
+// cursor on it. The fixed 3-item menu does not show integrations, but the
+// launch path is still reachable (CLI / future menu layouts), so the tests
+// drive it through the model directly.
+func withIntegrationItem(menu model, state *launch.LauncherState, name string) model {
+	menu.items = append(menu.items, integrationMenuItem(state.Integrations[name]))
+	menu.cursor = len(menu.items) - 1
+	return menu
+}
+
 func TestMenuEnterOnIntegrationSelectsLaunch(t *testing.T) {
-	menu := newModel(launcherTestState())
-	menu.cursor = findMenuCursorByIntegration(menu.items, "claude")
-	if menu.cursor == -1 {
-		t.Fatal("expected claude menu item")
-	}
+	state := launcherTestState()
+	menu := withIntegrationItem(newModel(state), state, "claude")
 	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := updated.(model)
 	want := TUIAction{Kind: TUIActionLaunchIntegration, Integration: "claude"}
@@ -297,11 +179,8 @@ func TestMenuEnterOnIntegrationSelectsLaunch(t *testing.T) {
 }
 
 func TestMenuRightOnIntegrationSelectsConfigure(t *testing.T) {
-	menu := newModel(launcherTestState())
-	menu.cursor = findMenuCursorByIntegration(menu.items, "claude")
-	if menu.cursor == -1 {
-		t.Fatal("expected claude menu item")
-	}
+	state := launcherTestState()
+	menu := withIntegrationItem(newModel(state), state, "claude")
 	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyRight})
 	got := updated.(model)
 	want := TUIAction{Kind: TUIActionLaunchIntegration, Integration: "claude", ForceConfigure: true}
@@ -317,11 +196,7 @@ func TestMenuIgnoresDisabledActions(t *testing.T) {
 	claude.Changeable = false
 	state.Integrations["claude"] = claude
 
-	menu := newModel(state)
-	menu.cursor = findMenuCursorByIntegration(menu.items, "claude")
-	if menu.cursor == -1 {
-		t.Fatal("expected claude menu item")
-	}
+	menu := withIntegrationItem(newModel(state), state, "claude")
 
 	updatedEnter, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if updatedEnter.(model).selected {
@@ -336,7 +211,7 @@ func TestMenuIgnoresDisabledActions(t *testing.T) {
 
 func TestMenuShowsOnlySelectedItemsCurrentModel(t *testing.T) {
 	state := launcherTestState()
-	menu := newModel(state)
+	menu := withIntegrationItem(newModel(state), state, "claude")
 	for i, item := range menu.items {
 		menu.cursor = i
 		view := menu.View()
@@ -358,12 +233,7 @@ func TestMenuShowsInstallStatusAndHint(t *testing.T) {
 	opencode.InstallHint = "Install from https://example.com/opencode"
 	state.Integrations["opencode"] = opencode
 
-	state.LastSelection = "opencode"
-	menu := newModel(state)
-	menu.cursor = findMenuCursorByIntegration(menu.items, "opencode")
-	if menu.cursor == -1 {
-		t.Fatal("expected opencode menu item")
-	}
+	menu := withIntegrationItem(newModel(state), state, "opencode")
 	view := menu.View()
 	if !strings.Contains(view, "(not installed)") {
 		t.Fatalf("expected not-installed marker\n%s", view)
@@ -373,18 +243,28 @@ func TestMenuShowsInstallStatusAndHint(t *testing.T) {
 	}
 }
 
-func TestMenuNavigationCyclesRootItems(t *testing.T) {
+func TestMenuNavigationWalksAllFixedItems(t *testing.T) {
 	menu := newModel(launcherTestState())
-	// Root menu: run item (0) and knowledge item (1).
+	// Root menu: chat (0), knowledge (1), service (2).
 	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyDown})
 	menu = updated.(model)
 	if menu.cursor != 1 || !menu.items[1].isKnowledge {
 		t.Fatalf("expected cursor on knowledge item after down, got %d", menu.cursor)
 	}
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyDown})
+	menu = updated.(model)
+	if menu.cursor != 2 || !menu.items[2].isService {
+		t.Fatalf("expected cursor on service item after second down, got %d", menu.cursor)
+	}
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyDown})
+	menu = updated.(model)
+	if menu.cursor != 2 {
+		t.Fatalf("down past the last item must not move the cursor, got %d", menu.cursor)
+	}
 	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyUp})
 	menu = updated.(model)
-	if menu.cursor != 0 || !menu.items[0].isRunModel {
-		t.Fatalf("expected cursor back on run item after up, got %d", menu.cursor)
+	if menu.cursor != 1 || !menu.items[1].isKnowledge {
+		t.Fatalf("expected cursor back on knowledge item after up, got %d", menu.cursor)
 	}
 }
 
@@ -420,5 +300,185 @@ func TestMenuKnowledgeScreenShowsStatus(t *testing.T) {
 	menu = updated.(model)
 	if menu.showKB {
 		t.Fatal("expected back on main menu after esc")
+	}
+}
+
+func TestMenuServiceScreenRendersEnglishAndSelectsFirstItem(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	menu := newModel(nil)
+	if view := menu.View(); !strings.Contains(view, "Service") {
+		t.Fatalf("expected english Service item in main menu\n%s", view)
+	}
+
+	// Move to the service item and enter it.
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyDown})
+	menu = updated.(model)
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyDown})
+	menu = updated.(model)
+	if !menu.items[menu.cursor].isService {
+		t.Fatalf("expected cursor on service item, got %q", menu.items[menu.cursor].title)
+	}
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	if !menu.showService {
+		t.Fatal("expected service screen to open")
+	}
+	if menu.serviceCursor != 0 {
+		t.Fatalf("first service entry must be pre-selected, cursor=%d", menu.serviceCursor)
+	}
+
+	view := menu.View()
+	for _, want := range []string{"Service", "Recreate env vars (~/.ollama/env)", "▸"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("service screen missing %q\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Служебное") {
+		t.Fatalf("service screen must be english only\n%s", view)
+	}
+}
+
+func TestMenuServiceConfirmWritesReferenceEnvFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	menu := newModel(nil)
+	menu.showService = true
+	menu.serviceCursor = 0
+
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	if !menu.showEnvConfirm {
+		t.Fatal("expected confirmation prompt")
+	}
+
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	menu = updated.(model)
+	if menu.envMsg == "" {
+		t.Fatal("expected result message after confirm")
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".ollama", "env"))
+	if err != nil {
+		t.Fatalf("env file not written: %v", err)
+	}
+	if !strings.Contains(string(data), "OLLAMA_KEEP_ALIVE") {
+		t.Fatalf("env reference missing known variables\n%s", string(data))
+	}
+}
+
+func TestMenuServiceSubscreenNavigatesBack(t *testing.T) {
+	menu := newModel(nil)
+	menu.showService = true
+	menu.serviceCursor = 0
+
+	// A single entry: down/up must not push the cursor out of range.
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyDown},
+		{Type: tea.KeyDown},
+		{Type: tea.KeyUp},
+	} {
+		updated, _ := menu.Update(key)
+		menu = updated.(model)
+		if menu.serviceCursor != 0 {
+			t.Fatalf("cursor on the only entry must stay 0, got %d", menu.serviceCursor)
+		}
+	}
+
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	menu = updated.(model)
+	if menu.showService {
+		t.Fatal("esc must return to the main menu")
+	}
+	if view := menu.View(); !strings.Contains(view, "Chat with a model") {
+		t.Fatalf("expected main menu after esc\n%s", view)
+	}
+}
+
+func TestMenuServiceConfirmCancelAndRepeatAreSafe(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	menu := newModel(nil)
+	menu.showService = true
+
+	// enter -> confirm prompt, n cancels without writing.
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	menu = updated.(model)
+	if menu.showEnvConfirm || menu.envMsg != "" {
+		t.Fatal("n must close the prompt and clear the message")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ollama", "env")); !os.IsNotExist(err) {
+		t.Fatal("cancel must not write the env file")
+	}
+
+	// Confirm, then press y again: the file must not be rewritten/duplicated.
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	menu = updated.(model)
+	first := menu.envMsg
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	menu = updated.(model)
+	if menu.envMsg != first {
+		t.Fatalf("repeated confirm must keep the first result, got %q want %q", menu.envMsg, first)
+	}
+
+	// esc leaves the confirmation state and then the service screen.
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	menu = updated.(model)
+	if menu.showEnvConfirm {
+		t.Fatal("esc must leave the confirmation state")
+	}
+}
+
+func TestMenuServiceShowsWriteResult(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	menu := newModel(nil)
+	menu.showService = true
+
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	if view := menu.View(); !strings.Contains(view, "Write to: "+filepath.Join(home, ".ollama", "env")) {
+		t.Fatalf("confirmation must show the real target path\n%s", view)
+	}
+
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	menu = updated.(model)
+	view := menu.View()
+	for _, want := range []string{"Written:", filepath.Join(home, ".ollama", "env")} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("result screen missing %q\n%s", want, view)
+		}
+	}
+}
+
+func TestMenuServiceReportsWriteError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// A regular file where the .ollama directory should be makes MkdirAll fail.
+	if err := os.WriteFile(filepath.Join(home, ".ollama"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	menu := newModel(nil)
+	menu.showService = true
+
+	updated, _ := menu.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	menu = updated.(model)
+	updated, _ = menu.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	menu = updated.(model)
+
+	if !strings.HasPrefix(menu.envMsg, "Error: ") {
+		t.Fatalf("expected an error message, got %q", menu.envMsg)
+	}
+	if view := menu.View(); !strings.Contains(view, "Error: ") {
+		t.Fatalf("error must be visible\n%s", view)
 	}
 }

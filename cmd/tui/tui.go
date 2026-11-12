@@ -2,10 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 	"slices"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,6 +23,7 @@ var (
 			PaddingLeft(2)
 
 	menuSelectedItemStyle = lipgloss.NewStyle().
+				PaddingLeft(2).
 				Bold(true).
 				Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"})
 
@@ -66,9 +67,22 @@ var knowledgeMenuItem = menuItem{
 }
 
 var serviceMenuItem = menuItem{
-	title:       "Служебное",
-	description: "Service tools: env vars, diagnostics, maintenance",
+	title:       "Service",
+	description: "Environment file reference, diagnostics, maintenance",
 	isService:   true,
+}
+
+// serviceItem is one entry of the Service sub-menu.
+type serviceItem struct {
+	title       string
+	description string
+}
+
+var serviceMenuItems = []serviceItem{
+	{
+		title:       "Recreate env vars (~/.ollama/env)",
+		description: "Full env reference; overrides /etc/ollama/env. All lines commented out.",
+	},
 }
 
 var othersMenuItem = menuItem{
@@ -85,20 +99,20 @@ var launcherMenuIntegrations = []string{"claude", "opencode", "hermes", "opencla
 const launcherMenuLimit = 4
 
 type model struct {
-	state         *launch.LauncherState
-	items         []menuItem
-	cursor        int
-	showOthers    bool
-	width         int
-	quitting      bool
-	selected      bool
-	action        TUIAction
-	showKB        bool
-	kbText        string
-	showService   bool
-	serviceCursor int
+	state          *launch.LauncherState
+	items          []menuItem
+	cursor         int
+	showOthers     bool
+	width          int
+	quitting       bool
+	selected       bool
+	action         TUIAction
+	showKB         bool
+	kbText         string
+	showService    bool
+	serviceCursor  int
 	showEnvConfirm bool
-	envMsg        string
+	envMsg         string
 }
 
 func newModel(state *launch.LauncherState) model {
@@ -127,7 +141,7 @@ func shouldExpandOthers(state *launch.LauncherState) bool {
 }
 
 func buildMenuItems(state *launch.LauncherState, showOthers bool) []menuItem {
-	// Fixed 3-item menu (old releases): Chat / Knowledge base-RAG / Служебное.
+	// Fixed 3-item menu (old releases): Chat / Knowledge base-RAG / Service.
 	// Upstream launch integrations (Claude Code, Qwen Code, etc.) are NOT shown
 	// in the top-level TUI menu — they stay reachable via `ollama launch` CLI only.
 	return []menuItem{runModelMenuItem, knowledgeMenuItem, serviceMenuItem}
@@ -244,7 +258,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if item.isService {
 				m.showService = true
+				// First entry is pre-selected so the sub-menu opens with a
+				// visible cursor, not on a blank/highlight-less state.
 				m.serviceCursor = 0
+				m.showEnvConfirm = false
+				m.envMsg = ""
 				return m, nil
 			}
 			if m.selectableItem(item) {
@@ -312,7 +330,7 @@ func (m model) updateKB(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateService handles keys on the Service (Служебное) sub-screen.
+// updateService handles keys on the Service sub-screen.
 func (m model) updateService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -328,14 +346,17 @@ func (m model) updateService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.showEnvConfirm {
 		switch msg.String() {
 		case "y", "\r":
+			if m.envMsg != "" { // already done: keep the result on screen
+				return m, nil
+			}
 			path, err := envconfig.RecreateUserEnvFile()
 			if err != nil {
 				m.envMsg = "Error: " + err.Error()
 			} else {
-				m.envMsg = path + " recreated successfully.\nRestart ollama service to apply changes."
+				m.envMsg = "Written: " + path + "\nRestart ollama service to apply changes."
 			}
 			return m, nil
-		case "n":
+		case "n", "esc":
 			m.showEnvConfirm = false
 			m.envMsg = ""
 			return m, nil
@@ -344,14 +365,13 @@ func (m model) updateService(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Service sub-menu navigation
-	const serviceItemsCount = 1 // currently only one item: recreate env vars
 	switch msg.String() {
 	case "up", "k":
 		if m.serviceCursor > 0 {
 			m.serviceCursor--
 		}
 	case "down", "j":
-		if m.serviceCursor < serviceItemsCount-1 {
+		if m.serviceCursor < len(serviceMenuItems)-1 {
 			m.serviceCursor++
 		}
 	case "enter", " ":
@@ -416,7 +436,7 @@ func (m model) View() string {
 		return ""
 	}
 
-	s := selectorTitleStyle.Render("Ollama TUI " + versionStyle.Render(version.Version)) + "\n\n"
+	s := selectorTitleStyle.Render("Ollama TUI "+versionStyle.Render(version.Version)) + "\n\n"
 
 	if m.showKB {
 		s += menuSelectedItemStyle.Render("Knowledge base / RAG") + "\n\n" +
@@ -429,31 +449,7 @@ func (m model) View() string {
 	}
 
 	if m.showService {
-		s += menuSelectedItemStyle.Render("Служебное") + "\n\n"
-
-		if m.showEnvConfirm {
-			if m.envMsg != "" {
-				s += menuItemStyle.Render(m.envMsg) + "\n\n"
-			} else {
-				home, _ := os.UserHomeDir()
-				path := home + "/.ollama/env"
-				s += menuItemStyle.Render("Recreate env vars: " + path) + "\n" +
-					menuItemStyle.Render("This will overwrite the file with documented defaults.\n") +
-					menuItemStyle.Render("Your current settings in that file will be LOST.") + "\n\n"
-			}
-			s += selectorHelpStyle.Render("y confirm • n cancel")
-		} else {
-			// Service sub-menu items
-			serviceItems := []string{"Recreate env vars (~/.ollama/env)"}
-			for i, label := range serviceItems {
-				prefix := "  "
-				if m.serviceCursor == i {
-					prefix = "▸ "
-				}
-				s += menuItemStyle.Render(prefix+label) + "\n"
-			}
-			s += "\n" + selectorHelpStyle.Render("↑/↓ navigate • enter select • esc back to menu")
-		}
+		s += m.renderServiceScreen()
 
 		if m.width > 0 {
 			return lipgloss.NewStyle().MaxWidth(m.width).Render(s)
@@ -471,6 +467,44 @@ func (m model) View() string {
 		return lipgloss.NewStyle().MaxWidth(m.width).Render(s)
 	}
 	return s
+}
+
+// renderServiceScreen draws the Service sub-screen: a section header instead of
+// a duplicated menu title, and sub-menu entries that use the same cursor and
+// description styles as the main menu so the first entry starts out highlighted.
+func (m model) renderServiceScreen() string {
+	var b strings.Builder
+	b.WriteString(sectionHeaderStyle.Render("Service") + "\n\n")
+
+	if m.showEnvConfirm {
+		item := serviceMenuItems[0]
+		b.WriteString(menuSelectedItemStyle.Render("▸ "+item.title) + "\n")
+		b.WriteString(menuDescStyle.Render(item.description) + "\n\n")
+		if m.envMsg != "" {
+			b.WriteString(menuItemStyle.Render(m.envMsg) + "\n\n")
+		} else {
+			path, err := envconfig.UserEnvPath()
+			if err != nil {
+				path = "~/.ollama/env"
+			}
+			b.WriteString(menuItemStyle.Render("Write to: "+path) + "\n")
+			b.WriteString(menuDescStyle.Render("Existing settings in that file will be LOST.") + "\n\n")
+		}
+		b.WriteString(selectorHelpStyle.Render("y confirm • n cancel"))
+		return b.String()
+	}
+
+	for i, item := range serviceMenuItems {
+		if i == m.serviceCursor {
+			b.WriteString(menuSelectedItemStyle.Render("▸ " + item.title))
+		} else {
+			b.WriteString(menuItemStyle.Render("  " + item.title))
+		}
+		b.WriteString("\n")
+		b.WriteString(menuDescStyle.Render(item.description) + "\n\n")
+	}
+	b.WriteString(selectorHelpStyle.Render("↑/↓ navigate • enter select • esc back to menu"))
+	return b.String()
 }
 
 func (m model) renderMenuItem(index int, item menuItem) string {
@@ -500,7 +534,8 @@ func (m model) renderMenuItem(index int, item menuItem) string {
 	} else if item.isService {
 		if m.cursor == index {
 			style = menuSelectedItemStyle
-		}} else {
+		}
+	} else {
 		integrationState := m.state.Integrations[item.integration]
 		if !integrationState.Selectable {
 			if m.cursor == index {
