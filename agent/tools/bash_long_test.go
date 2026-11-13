@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -96,4 +97,50 @@ func TestBashLongExecuteAppliesClampedTimeout(t *testing.T) {
 	if clamped != bashLongMaxTimeout {
 		t.Fatalf("clamped timeout = %v, want %v", clamped, bashLongMaxTimeout)
 	}
+}
+
+// TestBashLongExecuteAddsTimingPrefix verifies that the result content starts
+// with a [Time: ... | Duration: ...] line.
+func TestBashLongExecuteAddsTimingPrefix(t *testing.T) {
+	tool := NewBashLong()
+
+	result, err := tool.Execute(t.Context(), agent.ToolContext{}, map[string]any{
+		"command": shellTestCommand("echo hello", "Write-Output hello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Must start with [Time: and contain Duration.
+	if len(result.Content) < 10 || result.Content[:6] != "[Time:" {
+		t.Fatalf("expected timing prefix, got content starting with: %.50q", result.Content)
+	}
+	if !containsAll(result.Content, "[Time:", "Duration:") {
+		t.Errorf("missing expected fields in: %.120s", result.Content)
+	}
+
+	// First call should NOT have "Since last bash_long".
+	if containsAll(result.Content, "Since last") {
+		t.Errorf("first call should not report 'since last', got: %.120s", result.Content)
+	}
+
+	// Second call SHOULD include delta from first.
+	result2, err := tool.Execute(t.Context(), agent.ToolContext{}, map[string]any{
+		"command": shellTestCommand("echo again", "Write-Output again"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsAll(result2.Content, "Since last bash_long") {
+		t.Errorf("second call should report 'since last', got: %.120s", result2.Content)
+	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }

@@ -266,3 +266,100 @@ func doWriteEnvFileAt(path string, force bool) (string, error) {
 	}
 	return path, nil
 }
+
+const providersTemplate = `{
+  "providers": [
+    {
+      "name": "proxyapi",
+      "base_url": "https://api.proxyapi.ru/v1",
+      "api_key": "YOUR_API_KEY_HERE",
+      "models": [
+        "deepseek/deepseek-v4.1-flash-1017",
+        "perplexity/sonar"
+      ],
+      "context_window": 256000,
+      "context_windows": {
+        "deepseek/deepseek-v4.1-flash-1017": 1000000,
+        "perplexity/sonar": 120000
+      }
+    }
+  ]
+}
+`
+
+const externalPromptTemplate = `You are a helpful AI assistant running locally. Reply in the user's language.
+
+## Style
+- Think and respond in short bullet points.
+- Explain architecture and code in simple, conversational English.
+- Avoid unjustified jargon; if a technical term is necessary, state its plain meaning first.
+
+## Workflow
+- Break tasks into steps. More than 4 steps → write a plan file to track progress.
+- The user's task description is just their general understanding; understand the goal and reorder requests chronologically for execution.
+- When you hit a problem, search the internet for solutions first.
+- Your knowledge may be outdated. Actively verify how tasks are solved with newer mechanisms.
+
+## Memory
+- Write memory notes for: what you did / how to reproduce your changes / how to roll back on errors / checkpoints after major actions.
+- Each memory entry is a separate file; do not append to existing ones.
+- Always add tags to facilitate quick searching.
+`
+
+// EnsureUserOllamaDir creates the user-level ~/.ollama directory structure on
+// first launch. It only creates files/dirs that don't already exist, never
+// overwrites user content:
+//
+//	~/.ollama/env                        — env reference (all commented out)
+//	~/.ollama/providers.json             — external providers config template
+//	~/.ollama/external_system_prompt.md  — universal system prompt stub
+//	~/.ollama/chats/                     — chat save directory (empty)
+//	~/.ollama/knowledge/                 — knowledge base directory (empty)
+func EnsureUserOllamaDir() {
+	var home string
+	if h, err := os.UserHomeDir(); err == nil {
+		home = h
+	} else {
+		return // cannot determine home; non-fatal
+	}
+
+	base := filepath.Join(home, ".ollama")
+
+	// Create base directory.
+	if err := os.MkdirAll(base, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "ollama: warning: cannot create %s: %v\n", base, err)
+		return
+	}
+
+	// Empty directories (no files inside).
+	for _, sub := range []string{"chats", "knowledge"} {
+		dir := filepath.Join(base, sub)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			_ = os.MkdirAll(dir, 0755)
+		}
+	}
+
+	// env file — reuse the same template as /etc/ollama/env.
+	envPath := filepath.Join(base, "env")
+	writeIfMissing(envPath, []byte(envFileTemplate), 0644)
+
+	// providers.json — example with placeholder key.
+	providersPath := filepath.Join(base, "providers.json")
+	writeIfMissing(providersPath, []byte(providersTemplate), 0600)
+
+	// external_system_prompt.md — short general stub.
+	promptPath := filepath.Join(base, "external_system_prompt.md")
+	writeIfMissing(promptPath, []byte(externalPromptTemplate), 0644)
+}
+
+// writeIfMissing creates the file at path with content if it doesn't already exist.
+func writeIfMissing(path string, content []byte, perm os.FileMode) {
+	if _, err := os.Stat(path); err == nil {
+		return // already exists, don't touch
+	}
+	if err := os.WriteFile(path, content, perm); err != nil {
+		fmt.Fprintf(os.Stderr, "ollama: warning: cannot create %s: %v\n", path, err)
+	} else {
+		fmt.Fprintf(os.Stderr, "ollama: created default %s (edit to customize)\n", filepath.Base(path))
+	}
+}

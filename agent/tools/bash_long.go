@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ollama/ollama/agent"
@@ -28,6 +30,8 @@ const (
 // from the embedded *Bash; only identity and the effective timeout differ.
 type BashLong struct {
 	*Bash
+	mu        sync.Mutex
+	lastRunAt time.Time // zero value means "never ran"
 }
 
 // NewBashLong builds a BashLong with the default long timeout configured.
@@ -44,11 +48,42 @@ func (b *BashLong) Name() string {
 // The deadline is only an upper bound: the result returns as soon as the command
 // finishes. A value copy of the shared *Bash is used so concurrent calls do not
 // race on state.
+//
+// On completion the result content is prefixed with a timing line containing:
+//   - current UTC wall-clock time
+//   - how long this command took to execute
+//   - elapsed time since the previous bash_long call (if any)
 func (b *BashLong) Execute(ctx context.Context, toolCtx agent.ToolContext, args map[string]any) (agent.ToolResult, error) {
 	t := b.callTimeout(args)
 	lb := *b.Bash // value copy (holds only Timeout): safe under concurrent calls
 	lb.Timeout = t
-	return lb.Execute(ctx, toolCtx, args)
+
+	start := time.Now()
+	runResult, err := lb.Execute(ctx, toolCtx, args)
+	end := time.Now()
+
+	// Build the timing prefix.
+	var prevDelta string
+	b.mu.Lock()
+	if !b.lastRunAt.IsZero() {
+		d := b.lastRunAt.Sub(start) // time between previous call's start and this one's start
+		if d < 0 {
+			d = 0
+		}
+		prevDelta = fmt.Sprintf(" | Since last bash_long: %s", formatDuration(d))
+	}
+	b.lastRunAt = end
+	b.mu.Unlock()
+
+	elapsed := end.Sub(start)
+	prefix := fmt.Sprintf("[Time: %s | Duration: %s%s]\n",
+		end.UTC().Format(time.RFC3339),
+		formatDuration(elapsed),
+		prevDelta,
+	)
+
+	runResult.Content = prefix + runResult.Content
+	return runResult, err
 }
 
 // callTimeout resolves the effective deadline for one call: the `timeout`
@@ -76,6 +111,24 @@ func (b *BashLong) callTimeout(args map[string]any) time.Duration {
 		}
 	}
 	return t
+}
+
+// formatDuration renders a duration in a compact human-friendly form for the
+// model (e.g. "3.2s", "1m 15s"). It avoids sub-second noise (< 10 ms → "0s")
+// and keeps values under an hour readable.
+func formatDuration(d time.Duration) string {
+	if d < 10*time.Millisecond {
+		return "<10ms"
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%dms", int64(d/time.Microsecond)/1000)
+	}
+	m := int64(d / time.Minute)
+	s := float64((d % time.Minute) / time.Millisecond) / 1000.0
+	if m == 0 {
+		return fmt.Sprintf("%.1fs", s)
+	}
+	return fmt.Sprintf("%dm %ds", m, int(s))
 }
 
 func (b *BashLong) Description() string {

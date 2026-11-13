@@ -2396,6 +2396,8 @@ func generate(cmd *cobra.Command, opts runOptions) error {
 func RunServer(_ *cobra.Command, _ []string) error {
 	// First run: generate /etc/ollama/env with documented defaults if missing.
 	envconfig.EnsureEnvFile()
+	// Create user-level ~/.ollama structure (env, providers.json, prompts, dirs).
+	envconfig.EnsureUserOllamaDir()
 
 	if err := initializeKeypair(); err != nil {
 		return err
