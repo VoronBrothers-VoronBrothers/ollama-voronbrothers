@@ -116,6 +116,7 @@ func (m *chatModel) handleSubmit() (tea.Model, tea.Cmd) {
 		// к моменту отправки inputPastedTexts уже будет очищен, и дословный
 		// "[Pasted text #N +L lines]" улетит модели.
 		m.pendingPrompts = append(m.pendingPrompts, m.expandPastedTextPlaceholders(input))
+		m.addPromptHistory(input)
 		m.status = fmt.Sprintf("queued (%d)", len(m.pendingPrompts))
 		m.input = nil
 		m.inputCursor = 0
@@ -716,6 +717,11 @@ func normalizePromptHistory(prompts []string) []string {
 func (m *chatModel) addPromptHistory(prompt string) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
+		return
+	}
+	// Skip consecutive duplicates: queued messages are added to history at
+	// queue time and again when they drain through startRun.
+	if len(m.promptHistory) > 0 && m.promptHistory[len(m.promptHistory)-1] == prompt {
 		return
 	}
 	m.promptHistory = append(m.promptHistory, prompt)
