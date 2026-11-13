@@ -31,6 +31,7 @@ type config struct {
 	LastModel         string                  `json:"last_model,omitempty"`
 	LastSelection     string                  `json:"last_selection,omitempty"` // "run" or integration name
 	OnboardingVersion int                     `json:"onboarding_version,omitempty"`
+	DefaultThinkLevel string                  `json:"default_think_level,omitempty"`
 }
 
 func NeedsWelcome() (bool, error) {
@@ -285,6 +286,27 @@ func SetLastModel(model string) error {
 		return err
 	}
 	cfg.LastModel = model
+	return save(cfg)
+}
+
+// DefaultThinkLevel returns the persisted default think level (e.g. "low", "medium",
+// "high", "max", "off") or empty string if not set.
+func DefaultThinkLevel() string {
+	cfg, err := load()
+	if err != nil {
+		return ""
+	}
+	return cfg.DefaultThinkLevel
+}
+
+// SetDefaultThinkLevel persists the default think level used for new sessions.
+// Valid values: "low", "medium", "high", "max", "off", or "" to clear.
+func SetDefaultThinkLevel(level string) error {
+	cfg, err := load()
+	if err != nil {
+		return err
+	}
+	cfg.DefaultThinkLevel = level
 	return save(cfg)
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/cmd/config"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/internal/modelref"
 	"github.com/ollama/ollama/readline"
@@ -35,6 +36,7 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 	usage := func() {
 		fmt.Fprintln(os.Stderr, "Available Commands:")
 		fmt.Fprintln(os.Stderr, "  /set            Set session variables")
+		fmt.Fprintln(os.Stderr, "  /think-forever    Set persistent think level (low/medium/high/max/off)")
 		fmt.Fprintln(os.Stderr, "  /show           Show model information")
 		fmt.Fprintln(os.Stderr, "  /add <paths>    Attach text files (txt/md/py/json/jsonl/...) to context")
 		fmt.Fprintln(os.Stderr, "  /load <model>   Load a session or model")
@@ -407,6 +409,46 @@ func generateInteractive(cmd *cobra.Command, opts runOptions) error {
 			} else {
 				usageSet()
 			}
+		case strings.HasPrefix(line, "/think-forever"):
+			aargs := strings.Fields(line)
+			if len(aargs) < 2 {
+				fmt.Println("Usage: /think-forever <level>")
+				fmt.Println("Levels: low, medium, high, max, off")
+				fmt.Println()
+				cur := config.DefaultThinkLevel()
+				if cur != "" {
+					fmt.Printf("Current default think level: %s\n", cur)
+				} else {
+					fmt.Println("No persistent think level set (model default applies).")
+				}
+				continue
+			}
+			level := aargs[1]
+			switch level {
+			case "low", "medium", "high", "max":
+				opts.Think = &api.ThinkValue{Value: level}
+				thinkExplicitlySet = true
+				if err := config.SetDefaultThinkLevel(level); err != nil {
+					fmt.Printf("Warning: failed to persist think level: %v\n", err)
+				}
+				if client, cerr := api.ClientFromEnvironment(); cerr == nil {
+					ensureThinkingSupport(cmd.Context(), client, opts.Model, opts.Runner)
+				}
+				fmt.Printf("Set think-forever to '%s'. This level persists across sessions.\n", level)
+			case "off":
+				opts.Think = &api.ThinkValue{Value: false}
+				thinkExplicitlySet = true
+				if err := config.SetDefaultThinkLevel("off"); err != nil {
+					fmt.Printf("Warning: failed to persist think level: %v\n", err)
+				}
+				if client, cerr := api.ClientFromEnvironment(); cerr == nil {
+					ensureThinkingSupport(cmd.Context(), client, opts.Model, opts.Runner)
+				}
+				fmt.Println("Set think-forever to 'off'. Thinking disabled by default across sessions.")
+			default:
+				fmt.Printf("Unknown level '%s'. Valid: low, medium, high, max, off\n", level)
+			}
+			continue
 		case strings.HasPrefix(line, "/show"):
 			args := strings.Fields(line)
 			if len(args) > 1 {

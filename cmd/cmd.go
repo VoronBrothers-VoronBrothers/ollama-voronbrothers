@@ -895,6 +895,7 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 	opts.Format = format
 
 	thinkFlag := cmd.Flags().Lookup("think")
+	thinkExplicitlySet := false
 	if thinkFlag.Changed {
 		thinkStr, err := cmd.Flags().GetString("think")
 		if err != nil {
@@ -911,8 +912,18 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 		default:
 			opts.Think = &api.ThinkValue{Value: thinkStr}
 		}
+		thinkExplicitlySet = true
 	} else {
-		opts.Think = nil
+		// No explicit --think flag; check persisted /think-forever setting.
+		if level := config.DefaultThinkLevel(); level != "" {
+			switch level {
+			case "low", "medium", "high", "max":
+				opts.Think = &api.ThinkValue{Value: level}
+			case "off":
+				opts.Think = &api.ThinkValue{Value: false}
+			}
+			thinkExplicitlySet = true
+		}
 	}
 	hidethinking, err := cmd.Flags().GetBool("hidethinking")
 	if err != nil {
@@ -991,7 +1002,7 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 
 	ensureCloudStub(cmd.Context(), client, name)
 
-	opts.Think, err = inferThinkingOption(&info.Capabilities, &opts, thinkFlag.Changed)
+	opts.Think, err = inferThinkingOption(&info.Capabilities, &opts, thinkExplicitlySet)
 	if err != nil {
 		return err
 	}

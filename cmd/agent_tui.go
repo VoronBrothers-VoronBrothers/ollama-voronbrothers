@@ -65,11 +65,18 @@ func prepareAgentModel(cmd *cobra.Command, client *api.Client, opts *agentTUIOpt
 	if err != nil {
 		return nil, err
 	}
-	// Default the agent TUI to medium thinking effort when the user did not
-	// explicitly choose a level. The inference above falls back to "on",
-	// which the model resolves to its default (medium) effort.
+	// Default the agent TUI thinking effort when the user did not explicitly
+	// choose a level. Prefer persisted /think-forever setting; fall back to "medium".
 	if !thinkExplicit && opts.Think != nil {
-		opts.Think = &api.ThinkValue{Value: "medium"}
+		persisted := config.DefaultThinkLevel()
+		switch persisted {
+		case "low", "medium", "high", "max":
+			opts.Think = &api.ThinkValue{Value: persisted}
+		case "off":
+			opts.Think = &api.ThinkValue{Value: false}
+		default:
+			opts.Think = &api.ThinkValue{Value: "medium"}
+		}
 	}
 	opts.MultiModal = showResponseSupportsMultimodal(info)
 	opts.ContextWindowTokens = showResponseContextWindow(info)
