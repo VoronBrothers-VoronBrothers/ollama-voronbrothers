@@ -55,6 +55,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/model", description: "switch models"},
 	{name: "/new", description: "start a new chat", aliases: []string{"/новый", "/нов"}},
 	{name: "/think", description: "set thinking mode"},
+	{name: "/think-forever", usage: "/think-forever <level>", description: "persistent think level (low/medium/high/max/off)"},
 	{name: "/tools", description: "toggle tools on or off"},
 	{name: "/system", usage: "/system [on|off]", description: "show or set the built-in system prompt"},
 	{name: "/skills", usage: "/skills [import codex|claude|pi | remove <name>]", description: "list, import or remove skills (hot reload keeps chat context)"},
@@ -186,6 +187,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return m.openThinkPicker()
 	case command == "/think":
 		return m.handleThinkCommand(args)
+	case command == "/think-forever":
+		return m.handleThinkForeverCommand(args)
 	case command == "/tools":
 		return m.handleToolsCommand(args)
 	case command == "/system":

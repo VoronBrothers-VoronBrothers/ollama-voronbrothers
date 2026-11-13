@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/cmd/config"
 )
 
 type chatThinkOption struct {
@@ -88,6 +89,40 @@ func (m chatModel) selectThinkOption() (tea.Model, tea.Cmd) {
 
 func (m *chatModel) handleThinkCommand(value string) (tea.Model, tea.Cmd) {
 	return m.applyThinkValue(value)
+}
+
+func (m *chatModel) handleThinkForeverCommand(args string) (tea.Model, tea.Cmd) {
+	if args == "" {
+		cur := config.DefaultThinkLevel()
+		msg := "Usage: /think-forever <level>\nLevels: auto, on, off, low, medium, high, max"
+		if cur != "" {
+			msg += "\nCurrent persistent level: " + cur
+		} else {
+			msg += "\nNo persistent level set (model default applies)."
+		}
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: msg}))
+		return *m, nil
+	}
+	think, label, err := parseThinkValue(args)
+	if err != nil {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: err.Error(), err: err.Error()}))
+		m.status = "error"
+		return *m, nil
+	}
+	// Apply to current session
+	m.opts.Think = think
+	// Persist
+	persistValue := label
+	if label == "auto" {
+		persistValue = ""
+	}
+	if err := config.SetDefaultThinkLevel(persistValue); err != nil {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: fmt.Sprintf("Failed to persist: %v", err), err: err.Error()}))
+		m.status = "think-forever (not persisted)"
+	} else {
+		m.status = fmt.Sprintf("think-forever: %s ✓", label)
+	}
+	return *m, nil
 }
 
 func (m *chatModel) applyThinkValue(value string) (tea.Model, tea.Cmd) {
