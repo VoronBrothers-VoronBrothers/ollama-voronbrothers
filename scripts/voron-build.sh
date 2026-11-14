@@ -108,50 +108,47 @@ go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version
 go build -ldflags "-X github.com/ollama/ollama/version.Version=$V" \
     -o /tmp/bee-patched ./bee/ || die "сборка bee"
 
-# --- Бэкап + атомарная замена (mv, не cp!) каждого бинарника ---
+# install_one <name> — явный цикл установки одного бинарника:
+#   1) бэкап текущего (версия из файла, иначе из имени .bak, иначе дата в имени);
+#   2) атомарная замена mv + chmod;
+#   3) вывод: куда положен бэкап и какая версия теперь стоит.
+# Новый бинарник ожидается в /tmp/<name>-patched.
 install_one() { # $1 = имя файла в /usr/local/bin
-    local name="$1" bak prev dst
+    local name="$1" bak prev dst v
     dst="$BIN/$name"
-    [ -f "$dst" ] || die "$dst не найден — ставь вручную (первый раз)"
-    prev=$(real_version "$dst"); [ -n "$prev" ] || prev=$(strip_bak "$(latest_bak "$name")" "$name")
 
-    if [ -n "$prev" ]; then
-        bak=$(backup_path "$name" "$prev")
+    if [ -f "$dst" ]; then
+        prev=$(real_version "$dst"); [ -n "$prev" ] || prev=$(strip_bak "$(latest_bak "$name")" "$name")
+        if [ -n "$prev" ]; then
+            bak=$(backup_path "$name" "$prev")
+        else
+            # версии ни в файле, ни среди .bak нет (ставили вручную без ldflags?) —
+            # всё равно делаем бэкап с датой, чтобы rollback оставался возможным
+            bak="$BIN/$name-unknown-$(date +%Y%m%d-%H%M).bak"
+            echo "ℹ️  $name: версия не найдена — бэкап с датой в имени"
+        fi
         $SUDO cp "$dst" "$bak" || die "бэкап $name → $(basename "$bak")"
+        echo "💾 бэкап: $(basename "$bak")"
     else
-        echo "⚠️  для $name нет прежнего бэкапа — первый .bak появится только после этой замены"
-        bak=""
+        echo "ℹ️  $name устанавливается впервые (без бэкапа)"
     fi
 
     $SUDO mv /tmp/$name-patched "$dst" && $SUDO chmod 755 "$dst" || die "установка $name"
-    echo "✅ $name: $( [ -n "${bak:-}" ] && basename "$bak") → $(basename "$dst") ($V)"
+    v=$(real_version "$dst")
+    echo "✅ $name: ${v:-версия не вшита} → $(basename "$dst")"
 }
 
 install_one ollama
 install_one lama
+install_one bee
 
-# bee — «мозг» под-агента (delegate). Устанавливается впервые мягко, дальше как пара.
-install_bee() {
-    local dst="$BIN/bee" bak prev
-    if [ -f "$dst" ]; then
-        prev=$(real_version "$dst")
-        if [ -n "$prev" ]; then
-            bak=$(backup_path bee "$prev")
-            $SUDO cp "$dst" "$bak" || die "бэкап bee → $(basename "$bak")"
-            echo "✅ bee: $(basename "$bak") → bee ($V)"
-        else
-            echo "⚠️  для bee нет версии — перезаписываю без бэкапа"
-        fi
-    else
-        echo "ℹ️  bee устанавливается впервые (без бэкапа)"
-    fi
-    $SUDO mv /tmp/bee-patched "$dst" && $SUDO chmod 755 "$dst" || die "установка bee"
-}
-install_bee
-
-# --- Проверка (ранбук §4) ---
+# --- Проверка и итог (ранбук §4): явная версия каждого поставленного бинарника ---
 echo ""
-ls -la "$BIN/ollama" "$BIN/lama" 2>/dev/null | sed 's/^/   /'
+for name in ollama lama bee; do
+    v=$(real_version "$BIN/$name")
+    if [ -n "$v" ]; then echo "✅ $name → $v"; else echo "⚠️  $name: версия не читается из бинарника!"; fi
+done
+ls -la "$BIN/ollama" "$BIN/lama" "$BIN/bee" | sed 's/^/   /'
 srv=$(curl -s --max-time 3 http://127.0.0.1:11434/api/version 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 || true)
 [ -n "$srv" ] && echo "ℹ️  сервер пока отвечает версией $srv — это нормально, новый бинарник подхватится при следующем старте."
 
