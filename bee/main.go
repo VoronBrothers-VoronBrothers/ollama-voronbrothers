@@ -68,7 +68,6 @@ func main() {
 
 	// Если есть стартовая задача — выполняем сразу.
 	if strings.TrimSpace(flagTask) != "" {
-		fmt.Printf("[bee] task=%q\n", flagTask)
 		runTask(client, ep, shell, corrCh, flagTask)
 	}
 
@@ -106,16 +105,24 @@ func parseArgs(args []string) {
 	}
 }
 
+// DefaultAgentModel — каноническое (полное) имя модели по умолчанию для под-агентов.
+// Формат «provider/model» совпадает с тем, как модель отображается в ollama
+// (/v1/models). resolveEndpoint умеет резолвить эту форму до имени API.
+const DefaultAgentModel = "proxyapi/deepseek/deepseek-v4.1-flash-1017"
+
 func defaultModel() string {
 	if m := os.Getenv("BEE_AGENT_MODEL"); m != "" {
 		return m
 	}
-	return "deepseek/deepseek-v4.1-flash-1017"
+	return DefaultAgentModel
 }
 
 // runTask — одна итерация agentic tool-loop по задаче. Не выходит в REPL,
 // не закрывает shell. Поправки из corrCh обрабатываются между шагами.
 func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan string, task string) {
+	// Статичная метка: всё от пользователя (стартовая задача, REPL-строки,
+	// поправки) — USER. Ответы модели — общее имя AI.
+	fmt.Printf("\nUSER: %s\n", strings.TrimSpace(task))
 	messages := []chatMsg{
 		{Role: "system", Content: systemPrompt()},
 		{Role: "user", Content: task},
@@ -128,7 +135,7 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 			if p == "" {
 				continue
 			}
-			fmt.Printf("[bee] correction received: %s\n", p)
+			fmt.Printf("USER (correction): %s\n", p)
 			messages = append(messages, chatMsg{Role: "user", Content: "Correction from supervisor (apply it): " + p})
 		}
 
@@ -140,8 +147,13 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 		}
 		messages = append(messages, resp.message)
 
+		// Промежуточный ответ модели рядом с tool calls — тоже метка AI.
+		if c := strings.TrimSpace(resp.message.Content); c != "" && len(resp.toolCalls) > 0 {
+			fmt.Printf("AI: %s\n", c)
+		}
+
 		if len(resp.toolCalls) == 0 {
-			fmt.Printf("\n[bee] FINAL:\n%s\n", strings.TrimSpace(resp.message.Content))
+			fmt.Printf("\nAI: %s\n", strings.TrimSpace(resp.message.Content))
 			emitDone("")
 			return
 		}
@@ -299,10 +311,12 @@ func loadProviders() []providerCfg {
 }
 
 // resolveEndpoint — точное совпадение ИЛИ prefix-match по первым символам.
-// Пример: "deepseek" → "deepseek/deepseek-v4.1-flash-1017" в proxyapi.
+// Понимает и каноническую форму «provider/model» (как в /v1/models): она
+// резолвится до bare-имени API. Пример: "proxyapi/deepseek/..." →
+// "deepseek/deepseek-v4.1-flash-1017" в proxyapi.
 func resolveEndpoint(model string) endpoint {
 	for _, p := range loadProviders() {
-		if full, ok := matchModel(p.Models, model); ok {
+		if full, ok := matchModel(p.Name, p.Models, model); ok {
 			e := endpoint{baseURL: strings.TrimSuffix(p.BaseURL, "/"), provider: "cloud:" + p.Name, apiKey: p.APIKey}
 			if full != model {
 				e.resolvedModel = full
@@ -317,15 +331,25 @@ func resolveEndpoint(model string) endpoint {
 	return endpoint{baseURL: strings.TrimSuffix(host, "/") + "/v1", provider: "local-ollama"}
 }
 
-// matchModel: exact OR prefix. Returns the full matched name.
-func matchModel(list []string, query string) (string, bool) {
+// matchModel: exact OR prefix. Returns the bare model name from list.
+// Понимает три формы query:
+//   - bare-имя из списка:            "deepseek/deepseek-v4.1-flash-1017"
+//   - каноническое «provider/model»:  "proxyapi/deepseek/deepseek-v4.1-flash-1017"
+//   - короткий alias (prefix):       "deepseek" / "sonar"
+func matchModel(providerName string, list []string, query string) (string, bool) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return "", false
 	}
+	pn := strings.ToLower(providerName)
 	for _, v := range list {
 		lv := strings.ToLower(v)
-		if lv == q || strings.HasPrefix(lv, q) {
+		withPrefix := pn + "/" + lv // каноническая форма «provider/model»
+		if q == lv || q == withPrefix {
+			return v, true
+		}
+		// короткий alias: query — префикс имени модели (напр. "deepseek")
+		if strings.HasPrefix(lv, q) {
 			return v, true
 		}
 	}
