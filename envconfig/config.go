@@ -246,6 +246,12 @@ func String(s string) func() string {
 	}
 }
 
+// DefaultModel is the single canonical built-in default model shared by every
+// binary (the TUI/`lama` launcher and the `bee` sub-agent brain). It is used
+// only when no override env var is set — LAMA_MODEL for the launcher,
+// BEE_AGENT_MODEL for sub-agents. Change it here to rebase all defaults at once.
+const DefaultModel = "proxyapi/deepseek/deepseek-v4.1-flash-1017"
+
 var (
 	LLMLibrary = String("OLLAMA_LLM_LIBRARY")
 	Editor     = String("OLLAMA_EDITOR")
