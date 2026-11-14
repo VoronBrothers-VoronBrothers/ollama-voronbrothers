@@ -176,6 +176,9 @@ const envFileTemplate = `# =====================================================
 # Disable the agent's shell tools (bash / powershell).
 # OLLAMA_AGENT_DISABLE_SHELL=1
 
+# Disable the agent's delegate tool (sub-agent spawn/pause/feed/stop). Enabled by default.
+# OLLAMA_AGENT_DISABLE_DELEGATE=1
+
 # Extra skills directory for the agent.
 # OLLAMA_SKILLS=/home/user/.ollama/skills
 

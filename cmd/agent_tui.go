@@ -17,10 +17,10 @@ import (
 	mcps "github.com/ollama/ollama/agent/mcps"
 	agenttools "github.com/ollama/ollama/agent/tools"
 	"github.com/ollama/ollama/api"
-	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/cmd/config"
 	"github.com/ollama/ollama/cmd/launch"
 	agentchat "github.com/ollama/ollama/cmd/tui/chat"
+	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
 	internalcloud "github.com/ollama/ollama/internal/cloud"
 	"github.com/ollama/ollama/internal/modelref"
@@ -318,6 +318,10 @@ func agentToolsRegistry(ctx context.Context, client *api.Client, modelName strin
 	// RAG и поиск по файлам — stubs, будут расширены.
 	registry.Register(&agenttools.KnowledgeSearch{})
 	registry.Register(&agenttools.SearchFiles{})
+
+	if envconfig.Var("OLLAMA_AGENT_DISABLE_DELEGATE") == "" {
+		registry.Register(agenttools.NewDelegate())
+	}
 
 	mcpsPool.RegisterTo(registry)
 	return registry

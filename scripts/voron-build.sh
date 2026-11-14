@@ -105,6 +105,8 @@ go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version
     -o /tmp/ollama-patched . || die "сборка ollama"
 go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version=$V" \
     -o /tmp/lama-patched ./lama/ || die "сборка lama"
+go build -ldflags "-X github.com/ollama/ollama/version.Version=$V" \
+    -o /tmp/bee-patched ./bee/ || die "сборка bee"
 
 # --- Бэкап + атомарная замена (mv, не cp!) каждого бинарника ---
 install_one() { # $1 = имя файла в /usr/local/bin
@@ -127,6 +129,25 @@ install_one() { # $1 = имя файла в /usr/local/bin
 
 install_one ollama
 install_one lama
+
+# bee — «мозг» под-агента (delegate). Устанавливается впервые мягко, дальше как пара.
+install_bee() {
+    local dst="$BIN/bee" bak prev
+    if [ -f "$dst" ]; then
+        prev=$(real_version "$dst")
+        if [ -n "$prev" ]; then
+            bak=$(backup_path bee "$prev")
+            $SUDO cp "$dst" "$bak" || die "бэкап bee → $(basename "$bak")"
+            echo "✅ bee: $(basename "$bak") → bee ($V)"
+        else
+            echo "⚠️  для bee нет версии — перезаписываю без бэкапа"
+        fi
+    else
+        echo "ℹ️  bee устанавливается впервые (без бэкапа)"
+    fi
+    $SUDO mv /tmp/bee-patched "$dst" && $SUDO chmod 755 "$dst" || die "установка bee"
+}
+install_bee
 
 # --- Проверка (ранбук §4) ---
 echo ""
