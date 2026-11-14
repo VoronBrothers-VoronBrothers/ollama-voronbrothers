@@ -26,8 +26,20 @@ var (
 	cmdTimeout = 120 * time.Second
 )
 
+const doneMarker = "[bee] DONE {end}"
+
+func emitDone(reason string) {
+	if reason == "" {
+		fmt.Println(doneMarker)
+	} else {
+		fmt.Printf("%s (%s)\n", doneMarker, reason)
+	}
+}
+
+
 type endpoint struct {
 	baseURL, provider, apiKey string
+	resolvedModel             string // полное имя из providers.json (если prefix-match)
 }
 
 func main() {
@@ -40,7 +52,11 @@ func main() {
 	}
 
 	ep := resolveEndpoint(flagModel)
-	fmt.Printf("[bee] model=%s task=%q\n[bee] endpoint=%s provider=%s\n", flagModel, flagTask, ep.baseURL, ep.provider)
+	// Если prefix-match нашёл полное имя — обновляем flagModel для API запросов.
+	if ep.resolvedModel != "" {
+		flagModel = ep.resolvedModel
+	}
+	fmt.Printf("[bee] model=%s endpoint=%s provider=%s\n", flagModel, ep.baseURL, ep.provider)
 
 	shell := newShell()
 	defer shell.close()
@@ -48,59 +64,28 @@ func main() {
 	corrCh := make(chan string, 16)
 	go readStdin(corrCh)
 
-	messages := []chatMsg{
-		{Role: "system", Content: systemPrompt()},
-		{Role: "user", Content: flagTask},
-	}
 	client := &http.Client{Timeout: 900 * time.Second}
-	left := maxRoundsN
 
+	// Если есть стартовая задача — выполняем сразу.
+	if strings.TrimSpace(flagTask) != "" {
+		fmt.Printf("[bee] task=%q\n", flagTask)
+		runTask(client, ep, shell, corrCh, flagTask)
+	}
+
+	// REPL: ждём следующую задачу или /exit.
 	for {
-		pending := drainCorrections(corrCh)
-		for _, p := range pending {
-			if p == "" {
-				continue
-			}
-			fmt.Printf("[bee] correction received: %s\n", p)
-			messages = append(messages, chatMsg{Role: "user", Content: "Correction from supervisor (apply it): " + p})
+		fmt.Print("[bee] ready (type /exit to quit): ")
+		line := waitStdin(corrCh)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
-
-		resp, err := chatOnce(client, ep, messages)
-		if err != nil {
-			fmt.Printf("[bee] ERROR model call: %v\n", err)
+		if line == "/exit" || line == "/quit" {
+			fmt.Println("[bee] exiting.")
 			return
 		}
-		messages = append(messages, resp.message)
-
-		if len(resp.toolCalls) == 0 {
-			fmt.Printf("\n[bee] FINAL:\n%s\n", strings.TrimSpace(resp.message.Content))
-			return
-		}
-
-		for _, tc := range resp.toolCalls {
-			name := "run_command"
-			if tc.Function.Name != "" {
-				name = tc.Function.Name
-			}
-			args := map[string]any{}
-			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			cmdStr, _ := args["command"].(string)
-			fmt.Printf("[bee] tool=%s cmd=%q\n", name, cmdStr)
-
-			out, rc, rerr := shell.run(cmdStr)
-			if rerr != nil {
-				out = fmt.Sprintf("(run_command error: %v)", rerr)
-			}
-			res := fmt.Sprintf("exit=%d\n%s", rc, out)
-			fmt.Printf("[bee]   => exit=%d (%d bytes)\n%s\n", rc, len(out), tail(out, 2000))
-			messages = append(messages, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: res})
-		}
-
-		left--
-		if left <= 0 {
-			fmt.Println("[bee] max rounds reached; stopping.")
-			return
-		}
+		// Новая задача — сбрасываем контекст.
+		runTask(client, ep, shell, corrCh, line)
 	}
 }
 
@@ -128,17 +113,75 @@ func defaultModel() string {
 	return "deepseek/deepseek-v4.1-flash-1017"
 }
 
-func resolveEndpoint(model string) endpoint {
-	for _, p := range loadProviders() {
-		if contains(p.Models, model) {
-			return endpoint{baseURL: strings.TrimSuffix(p.BaseURL, "/"), provider: "cloud:" + p.Name, apiKey: p.APIKey}
+// runTask — одна итерация agentic tool-loop по задаче. Не выходит в REPL,
+// не закрывает shell. Поправки из corrCh обрабатываются между шагами.
+func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan string, task string) {
+	messages := []chatMsg{
+		{Role: "system", Content: systemPrompt()},
+		{Role: "user", Content: task},
+	}
+	left := maxRoundsN
+
+	for {
+		pending := drainCorrections(corrCh)
+		for _, p := range pending {
+			if p == "" {
+				continue
+			}
+			fmt.Printf("[bee] correction received: %s\n", p)
+			messages = append(messages, chatMsg{Role: "user", Content: "Correction from supervisor (apply it): " + p})
+		}
+
+		resp, err := chatOnce(client, ep, messages)
+		if err != nil {
+			fmt.Printf("[bee] ERROR model call: %v\n", err)
+			emitDone("error")
+			return
+		}
+		messages = append(messages, resp.message)
+
+		if len(resp.toolCalls) == 0 {
+			fmt.Printf("\n[bee] FINAL:\n%s\n", strings.TrimSpace(resp.message.Content))
+			emitDone("")
+			return
+		}
+
+		for _, tc := range resp.toolCalls {
+			name := "run_command"
+			if tc.Function.Name != "" {
+				name = tc.Function.Name
+			}
+			args := map[string]any{}
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			cmdStr, _ := args["command"].(string)
+			fmt.Printf("[bee] tool=%s cmd=%q\n", name, cmdStr)
+
+			out, rc, rerr := shell.run(cmdStr)
+			if rerr != nil {
+				out = fmt.Sprintf("(run_command error: %v)", rerr)
+			}
+			res := fmt.Sprintf("exit=%d\n%s", rc, out)
+			fmt.Printf("[bee]   => exit=%d (%d bytes)\n%s\n", rc, len(out), tail(out, 2000))
+			messages = append(messages, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: res})
+		}
+
+		left--
+		if left <= 0 {
+			fmt.Println("[bee] max rounds reached; stopping.")
+			emitDone("max-rounds")
+			return
 		}
 	}
-	host := os.Getenv("OLLAMA_URL")
-	if host == "" {
-		host = "http://127.0.0.1:11434"
+}
+
+// waitStdin блокирует ожидание одной строки из corrCh (без таймаута).
+func waitStdin(ch <-chan string) string {
+	for {
+		select {
+		case m := <-ch:
+			return strings.TrimSpace(m)
+		}
 	}
-	return endpoint{baseURL: strings.TrimSuffix(host, "/") + "/v1", provider: "local-ollama"}
 }
 
 type chatMsg struct {
@@ -255,13 +298,38 @@ func loadProviders() []providerCfg {
 	return w.Providers
 }
 
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
+// resolveEndpoint — точное совпадение ИЛИ prefix-match по первым символам.
+// Пример: "deepseek" → "deepseek/deepseek-v4.1-flash-1017" в proxyapi.
+func resolveEndpoint(model string) endpoint {
+	for _, p := range loadProviders() {
+		if full, ok := matchModel(p.Models, model); ok {
+			e := endpoint{baseURL: strings.TrimSuffix(p.BaseURL, "/"), provider: "cloud:" + p.Name, apiKey: p.APIKey}
+			if full != model {
+				e.resolvedModel = full
+			}
+			return e
 		}
 	}
-	return false
+	host := os.Getenv("OLLAMA_URL")
+	if host == "" {
+		host = "http://127.0.0.1:11434"
+	}
+	return endpoint{baseURL: strings.TrimSuffix(host, "/") + "/v1", provider: "local-ollama"}
+}
+
+// matchModel: exact OR prefix. Returns the full matched name.
+func matchModel(list []string, query string) (string, bool) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return "", false
+	}
+	for _, v := range list {
+		lv := strings.ToLower(v)
+		if lv == q || strings.HasPrefix(lv, q) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // drainCorrections вбирает все накопленные поправки из канала (non-blocking).

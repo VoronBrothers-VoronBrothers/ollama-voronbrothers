@@ -37,6 +37,9 @@ type agentInfo struct {
 	spawnedAt time.Time
 }
 
+// beeDoneMarker — должен совпадать с doneMarker в bee/main.go.
+const beeDoneMarker = "[bee] DONE {end}"
+
 // NewDelegate возвращает новый управляющий агентом.
 func NewDelegate() *Delegate { return &Delegate{agents: map[string]*agentInfo{}} }
 
@@ -45,6 +48,7 @@ func (d *Delegate) Name() string { return "delegate" }
 func (d *Delegate) Description() string {
 	return "Spawn and control sub-agents as separate live tmux processes. Actions: " +
 		"'spawn' starts an agent with a task; 'list' shows running agents; " +
+		"'output' reads the agent's terminal output; " +
 		"'stop' kills one; 'feed' sends it a message (at start or mid-run); " +
 		"'pause'/'resume' freeze/unfreeze its process. Sub-agents have full freedom; " +
 		"you only monitor and steer."
@@ -54,7 +58,7 @@ func (d *Delegate) Schema() api.ToolFunction {
 	props := api.NewToolPropertiesMap()
 	props.Set("action", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "One of: spawn, list, stop, feed, pause, resume.",
+		Description: "One of: spawn, list, output, stop, feed, pause, resume.",
 	})
 	props.Set("task", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
@@ -90,6 +94,12 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 		return d.spawn(toolCtx.WorkingDir, toString(args["task"]), toString(args["model"]), toString(args["id"]))
 	case "list":
 		return d.list()
+	case "output":
+		id := strings.TrimSpace(toString(args["id"]))
+		if id == "" {
+			return agent.ToolResult{Content: "Error: 'id' required for action output"}, nil
+		}
+		return d.output(id)
 	case "stop", "feed", "pause", "resume":
 		id := strings.TrimSpace(toString(args["id"]))
 		if id == "" {
@@ -108,7 +118,7 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 			return agent.ToolResult{Content: "Error: unhandled action '" + action + "'"}, nil
 		}
 	default:
-		return agent.ToolResult{Content: "Error: unknown action '" + action + "'. Use spawn|list|stop|feed|pause|resume."}, nil
+		return agent.ToolResult{Content: "Error: unknown action '" + action + "'. Use spawn|list|output|stop|feed|pause|resume."}, nil
 	}
 }
 
@@ -162,16 +172,33 @@ func (d *Delegate) list() (agent.ToolResult, error) {
 	}
 	var b strings.Builder
 	for _, a := range infos {
-		alive := tmuxSessionAlive(a.session)
-		status := "running"
-		if !alive {
-			status = "dead"
-		} else if a.paused {
+		status := "working"
+		if a.paused {
 			status = "paused"
+		} else if !tmuxSessionAlive(a.session) {
+			status = "dead"
+		} else if lastPaneLineIsDone(a.session) {
+			status = "done"
 		}
 		fmt.Fprintf(&b, "- %s [%s] session=%s pid=%d age=%s\n    task: %s\n", a.id, status, a.session, a.panePID, time.Since(a.spawnedAt).Round(time.Second), a.task)
 	}
 	return agent.ToolResult{Content: strings.TrimSpace(b.String())}, nil
+}
+
+func (d *Delegate) output(id string) (agent.ToolResult, error) {
+	a := d.getAgent(id)
+	if a == nil {
+		return agent.ToolResult{Content: fmt.Sprintf("Error: no such agent %q", id)}, nil
+	}
+	out, err := exec.Command("tmux", "capture-pane", "-t", a.session, "-p").CombinedOutput()
+	if err != nil {
+		return agent.ToolResult{Content: fmt.Sprintf("Error reading output of %q: %v", id, err)}, nil
+	}
+	text := strings.TrimRight(string(out), "\n")
+	if text == "" {
+		text = "(no output yet)"
+	}
+	return agent.ToolResult{Content: fmt.Sprintf("[agent %s]\n%s", id, text)}, nil
 }
 
 func (d *Delegate) stop(id string) (agent.ToolResult, error) {
@@ -273,6 +300,25 @@ func panePIDOf(session string) int {
 func tmuxSessionAlive(session string) bool {
 	_, err := exec.Command("tmux", "has-session", "-t", session).CombinedOutput()
 	return err == nil
+}
+
+// lastPaneLineIsDone — true, если последний непустой вывод пейна содержит
+// авто стоп-маркер bee (DONE {end}) или REPL-prompt «ready». Это однозначный
+// признак, что модель агента перестала работать (не зависит от промпта).
+func lastPaneLineIsDone(session string) bool {
+	out, err := exec.Command("tmux", "capture-pane", "-t", session, "-p").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(out), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		return strings.Contains(l, beeDoneMarker) || strings.HasSuffix(l, "ready (type /exit to quit): ")
+	}
+	return false
 }
 
 func suffix(b []byte) string {
