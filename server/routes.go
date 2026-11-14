@@ -501,6 +501,9 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 	}
 
 	thinking := m.genericThinking()
+	if shouldUseHarmony(m) && req.Think != nil && req.Think.Value == false {
+		thinking = m.Thinking()
+	}
 	if thinking == nil {
 		if err := api.ValidateLegacyThinking(req.Think); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -3224,6 +3227,9 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	}
 
 	thinking := m.genericThinking()
+	if shouldUseHarmony(m) && req.Think != nil && req.Think.Value == false {
+		thinking = m.Thinking()
+	}
 	if thinking == nil {
 		if err := api.ValidateLegacyThinking(req.Think); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
