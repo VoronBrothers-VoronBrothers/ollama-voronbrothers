@@ -76,6 +76,10 @@ func (d *Delegate) Schema() api.ToolFunction {
 		Type:        api.PropertyType{"string"},
 		Description: "Message to send with 'feed'.",
 	})
+	props.Set("lines", api.ToolProperty{
+		Type:        api.PropertyType{"number"},
+		Description: "For 'output': how many trailing lines to return (default 80). Omit for the default.",
+	})
 	return api.ToolFunction{
 		Name:        "delegate",
 		Description: d.Description(),
@@ -99,7 +103,16 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 		if id == "" {
 			return agent.ToolResult{Content: "Error: 'id' required for action output"}, nil
 		}
-		return d.output(id)
+		n := 80 // default trailing lines
+		if v, ok := args["lines"]; ok && v != nil {
+			switch t := v.(type) {
+			case int:
+				n = t
+			case float64:
+				n = int(t)
+			}
+		}
+		return d.output(id, n)
 	case "stop", "feed", "pause", "resume":
 		id := strings.TrimSpace(toString(args["id"]))
 		if id == "" {
@@ -185,7 +198,7 @@ func (d *Delegate) list() (agent.ToolResult, error) {
 	return agent.ToolResult{Content: strings.TrimSpace(b.String())}, nil
 }
 
-func (d *Delegate) output(id string) (agent.ToolResult, error) {
+func (d *Delegate) output(id string, n int) (agent.ToolResult, error) {
 	a := d.getAgent(id)
 	if a == nil {
 		return agent.ToolResult{Content: fmt.Sprintf("Error: no such agent %q", id)}, nil
@@ -194,11 +207,11 @@ func (d *Delegate) output(id string) (agent.ToolResult, error) {
 	if err != nil {
 		return agent.ToolResult{Content: fmt.Sprintf("Error reading output of %q: %v", id, err)}, nil
 	}
-	text := strings.TrimRight(string(out), "\n")
+	text := tailLines(string(out), n)
 	if text == "" {
 		text = "(no output yet)"
 	}
-	return agent.ToolResult{Content: fmt.Sprintf("[agent %s]\n%s", id, text)}, nil
+	return agent.ToolResult{Content: fmt.Sprintf("[agent %s] (last %d lines)\n%s", id, n, text)}, nil
 }
 
 func (d *Delegate) stop(id string) (agent.ToolResult, error) {
@@ -332,4 +345,22 @@ func suffix(b []byte) string {
 func toString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// tailLines — последние n строк вывода (с конца), без висящих пустых строков.
+// n<=0 → все непустые строки. Пустой ввод → "".
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	if last < 0 {
+		return ""
+	}
+	start := 0
+	if n > 0 && last+1-n > start {
+		start = last + 1 - n
+	}
+	return strings.Join(lines[start:last+1], "\n")
 }
