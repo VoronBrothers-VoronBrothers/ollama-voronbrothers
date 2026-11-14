@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/ollama/ollama/agent"
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/envconfig"
 )
 
 // Delegate — инструмент управления под-агентами bumblebee.
@@ -48,6 +51,7 @@ func (d *Delegate) Name() string { return "delegate" }
 func (d *Delegate) Description() string {
 	return "Spawn and control sub-agents as separate live tmux processes. Actions: " +
 		"'spawn' starts an agent with a task; 'list' shows running agents; " +
+		"'models' lists available agent brains (cloud providers + local ollama); " +
 		"'output' reads the agent's terminal output; " +
 		"'stop' kills one; 'feed' sends it a message (at start or mid-run); " +
 		"'pause'/'resume' freeze/unfreeze its process. Sub-agents have full freedom; " +
@@ -58,7 +62,7 @@ func (d *Delegate) Schema() api.ToolFunction {
 	props := api.NewToolPropertiesMap()
 	props.Set("action", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "One of: spawn, list, output, stop, feed, pause, resume.",
+		Description: "One of: spawn, list, models, output, stop, feed, pause, resume.",
 	})
 	props.Set("task", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
@@ -66,7 +70,7 @@ func (d *Delegate) Schema() api.ToolFunction {
 	})
 	props.Set("model", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Model name for the agent (default: deepseek via cloud provider). Optional.",
+		Description: "Model name for the agent (default: proxyapi/deepseek/deepseek-v4.1-flash-1017). Optional.",
 	})
 	props.Set("id", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
@@ -98,6 +102,8 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 		return d.spawn(toolCtx.WorkingDir, toString(args["task"]), toString(args["model"]), toString(args["id"]))
 	case "list":
 		return d.list()
+	case "models":
+		return d.listModels(), nil
 	case "output":
 		id := strings.TrimSpace(toString(args["id"]))
 		if id == "" {
@@ -131,11 +137,15 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 			return agent.ToolResult{Content: "Error: unhandled action '" + action + "'"}, nil
 		}
 	default:
-		return agent.ToolResult{Content: "Error: unknown action '" + action + "'. Use spawn|list|output|stop|feed|pause|resume."}, nil
+		return agent.ToolResult{Content: "Error: unknown action '" + action + "'. Use spawn|list|models|output|stop|feed|pause|resume."}, nil
 	}
 }
 
 func (d *Delegate) spawn(cwd, task, model, id string) (agent.ToolResult, error) {
+	// Fail fast: don't spawn a doomed session if the model doesn't exist.
+	if err := validateSpawnModel(model); err != nil {
+		return agent.ToolResult{Content: "Error: " + err.Error()}, nil
+	}
 	if cwd == "" {
 		cwd = "."
 	}
@@ -296,7 +306,7 @@ func agentCommand(task, model string) []string {
 
 func displayModel(model string) string {
 	if model == "" {
-		return "(default: deepseek via cloud provider)"
+		return "(default: proxyapi/deepseek/deepseek-v4.1-flash-1017)"
 	}
 	return model
 }
@@ -363,4 +373,141 @@ func tailLines(s string, n int) string {
 		start = last + 1 - n
 	}
 	return strings.Join(lines[start:last+1], "\n")
+}
+
+// --- guard: существует ли модель для spawn (providers.json ИЛИ локально) ---
+
+// providerEntry — минимальный срез providers.json, нужный только для проверки.
+type providerEntry struct {
+	Name   string   `json:"name"`
+	Models []string `json:"models"`
+}
+
+func loadProvidersForGuard() []providerEntry {
+	path := os.Getenv("OLLAMA_PROVIDERS_CONFIG")
+	if path == "" {
+		path = "$HOME/.ollama/providers.json"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var w struct {
+		Providers []providerEntry `json:"providers"`
+	}
+	if json.Unmarshal(data, &w) != nil {
+		return nil
+	}
+	return w.Providers
+}
+
+// matchModelGuard — зеркалит семантику bee/main.go matchModel: точное совпадение
+// ИЛИ prefix-match по bare-имени модели провайдера (включая каноническую форму
+// «provider/model»).
+func matchModelGuard(providerName string, list []string, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return false
+	}
+	pn := strings.ToLower(providerName)
+	for _, v := range list {
+		lv := strings.ToLower(v)
+		withPrefix := pn + "/" + lv // каноническая форма «provider/model»
+		if q == lv || q == withPrefix || strings.HasPrefix(lv, q) {
+			return true
+		}
+	}
+	return false
+}
+
+// localModelCheck — есть ли локально в ollama модель с таким именем (точное имя
+// или prefix). Возвращает (exists, conclusive): если сервер недоступен/ответ не
+// распарсился → conclusive=false, чтобы guard не блокировал spawn ложно.
+func localModelCheck(query string) (bool, bool) {
+	host := os.Getenv("OLLAMA_URL")
+	if host == "" {
+		host = "http://127.0.0.1:11434"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(strings.TrimSuffix(host, "/") + "/api/tags")
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	var w struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&w) != nil {
+		return false, false
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	for _, m := range w.Models {
+		name := strings.ToLower(m.Name)
+		if name == q || strings.HasPrefix(name, q) {
+			return true, true
+		}
+	}
+	return false, true // список получен, совпадений нет → точно отсутствует
+}
+
+// listModels — доступные «мозги» под-агентов: облачные (providers.json)
+// и локальные (ollama /api/tags). Используется action 'models'.
+func (d *Delegate) listModels() agent.ToolResult {
+	var b strings.Builder
+	for _, p := range loadProvidersForGuard() {
+		b.WriteString("cloud:" + p.Name + ":\n")
+		for _, m := range p.Models {
+			b.WriteString("  - " + p.Name + "/" + m + "\n")
+		}
+	}
+	host := os.Getenv("OLLAMA_URL")
+	if host == "" {
+		host = "http://127.0.0.1:11434"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(strings.TrimSuffix(host, "/") + "/api/tags")
+	if err == nil {
+		defer resp.Body.Close()
+		var w struct {
+			Models []struct {
+				Name string `json:"name"`
+			} `json:"models"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&w) == nil {
+			b.WriteString("local (ollama):\n")
+			for _, m := range w.Models {
+				b.WriteString("  - " + m.Name + "\n")
+			}
+		} else {
+			b.WriteString("local: failed to parse /api/tags\n")
+		}
+	} else {
+		b.WriteString("local: ollama server unavailable\n")
+	}
+	if envconfig.DefaultModel != "" {
+		b.WriteString("\ndefault agent brain: " + envconfig.DefaultModel)
+	}
+	return agent.ToolResult{Content: strings.TrimSpace(b.String())}
+}
+
+// validateSpawnModel — guard перед spawn под-агента. Пустая модель → OK (bee
+// использует встроенный дефолт). Иначе модель должна существовать в
+// providers.json ИЛИ локально; иначе явная ошибка с подсказкой про дефолтную
+// модель, чтобы не было тишайшего 404 из HTTP.
+func validateSpawnModel(model string) error {
+	q := strings.TrimSpace(model)
+	if q == "" {
+		return nil
+	}
+	for _, p := range loadProvidersForGuard() {
+		if matchModelGuard(p.Name, p.Models, q) {
+			return nil
+		}
+	}
+	if exists, conclusive := localModelCheck(q); exists || !conclusive {
+		return nil // найдена локально ИЛИ сервер недоступен (bee покажет свою ошибку)
+	}
+	return fmt.Errorf("model %q not found in providers.json nor locally; use the default %s", q, envconfig.DefaultModel)
 }
