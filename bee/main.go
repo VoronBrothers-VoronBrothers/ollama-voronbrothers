@@ -15,15 +15,21 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ollama/ollama/envconfig"
 )
 
 var (
 	flagModel  string
 	flagTask   string
 	maxRoundsN = 24 // защита от бесконечного loop
-	cmdTimeout = 120 * time.Second
+	// cmdTimeout — дедлайн на ОДНУ команду run_command у под-агента.
+	// Жёсткий потолок 30с: иначе висящая команда держит tmux-pane «замороженным»
+	// и саб-агент зависает в терминале (основной bumblebee это не трогает).
+	cmdTimeout = 30 * time.Second
 )
 
 const doneMarker = "[bee] DONE {end}"
@@ -35,7 +41,6 @@ func emitDone(reason string) {
 		fmt.Printf("%s (%s)\n", doneMarker, reason)
 	}
 }
-
 
 type endpoint struct {
 	baseURL, provider, apiKey string
@@ -108,7 +113,9 @@ func parseArgs(args []string) {
 // DefaultAgentModel — каноническое (полное) имя модели по умолчанию для под-агентов.
 // Формат «provider/model» совпадает с тем, как модель отображается в ollama
 // (/v1/models). resolveEndpoint умеет резолвить эту форму до имени API.
-const DefaultAgentModel = "proxyapi/deepseek/deepseek-v4.1-flash-1017"
+// Single source of truth for the built-in default model is envconfig.DefaultModel
+// (shared with the `lama` launcher). Override at runtime with BEE_AGENT_MODEL.
+const DefaultAgentModel = envconfig.DefaultModel
 
 func defaultModel() string {
 	if m := os.Getenv("BEE_AGENT_MODEL"); m != "" {
@@ -165,15 +172,8 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 			}
 			args := map[string]any{}
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			cmdStr, _ := args["command"].(string)
-			fmt.Printf("[bee] tool=%s cmd=%q\n", name, cmdStr)
-
-			out, rc, rerr := shell.run(cmdStr)
-			if rerr != nil {
-				out = fmt.Sprintf("(run_command error: %v)", rerr)
-			}
-			res := fmt.Sprintf("exit=%d\n%s", rc, out)
-			fmt.Printf("[bee]   => exit=%d (%d bytes)\n%s\n", rc, len(out), tail(out, 2000))
+			res := dispatchTool(shell, name, args)
+			fmt.Printf("[bee] tool=%s => %d bytes\n%s\n", name, len(res), tail(res, 2000))
 			messages = append(messages, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: res})
 		}
 
@@ -184,6 +184,198 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 			return
 		}
 	}
+}
+
+// dispatchTool — разветвление tool-вызовов: run_command идёт в персистентный
+// bash, read/write/edit работают с файлами напрямую (без round-trip через shell).
+func dispatchTool(shell *shell, name string, args map[string]any) string {
+	switch name {
+	case "read":
+		return toolRead(shell, args)
+	case "write":
+		return toolWrite(shell, args)
+	case "edit":
+		return toolEdit(shell, args)
+	default:
+		cmdStr, _ := args["command"].(string)
+		out, rc, rerr := shell.run(cmdStr)
+		if rerr != nil {
+			out = fmt.Sprintf("(run_command error: %v)", rerr)
+		}
+		return fmt.Sprintf("exit=%d\n%s", rc, out)
+	}
+}
+
+// beeTools — схемы инструментов, которые видит модель под-агента.
+func beeTools() []map[string]any {
+	obj := func(props map[string]any, req ...string) map[string]any {
+		m := map[string]any{"type": "object", "properties": props}
+		if len(req) > 0 {
+			m["required"] = req
+		}
+		return m
+	}
+	return []map[string]any{
+		{"type": "function", "function": map[string]any{
+			"name":        "run_command",
+			"description": "Run a shell command on this machine in a persistent bash (cwd is kept between calls). Returns stdout+stderr and exit code.",
+			"parameters":  obj(map[string]any{"command": map[string]any{"type": "string"}}, "command"),
+		}},
+		{"type": "function", "function": map[string]any{
+			"name":        "read",
+			"description": "Read a text file. Optional 1-based line range: start, end (inclusive). Relative paths resolve against the persistent shell cwd.",
+			"parameters": obj(map[string]any{
+				"path":  map[string]any{"type": "string"},
+				"start": map[string]any{"type": "integer"},
+				"end":   map[string]any{"type": "integer"},
+			}),
+		}},
+		{"type": "function", "function": map[string]any{
+			"name":        "write",
+			"description": "Create or overwrite a file with the given content (parent directories are created). Relative paths resolve against the persistent shell cwd.",
+			"parameters": obj(map[string]any{
+				"path":    map[string]any{"type": "string"},
+				"content": map[string]any{"type": "string"},
+			}, "path", "content"),
+		}},
+		{"type": "function", "function": map[string]any{
+			"name":        "edit",
+			"description": "Exact-text replacement in a file: old_text must appear exactly once (or set replace_all=true). Empty new_text deletes the match.",
+			"parameters": obj(map[string]any{
+				"path":        map[string]any{"type": "string"},
+				"old_text":    map[string]any{"type": "string"},
+				"new_text":    map[string]any{"type": "string"},
+				"replace_all": map[string]any{"type": "boolean"},
+			}),
+		}},
+	}
+}
+
+// --- лёгкие file-инструменты под-агента (read/write/edit) ---
+
+const maxReadResult = 16000 // потолок результата read, чтобы не раздувать контекст модели
+
+func expandPath(shell *shell, p string) string {
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(p, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = home + strings.TrimPrefix(p, "~")
+		}
+	}
+	if !filepath.IsAbs(p) {
+		if cwd, _, err := shell.run("pwd"); err == nil && strings.TrimSpace(cwd) != "" {
+			cwd = strings.TrimSpace(cwd)
+			if cwd == "/" {
+				p = "/" + strings.TrimPrefix(p, "/")
+			} else {
+				p = filepath.Join(cwd, p)
+			}
+		}
+	}
+	return p
+}
+
+func toolRead(shell *shell, args map[string]any) string {
+	path, _ := args["path"].(string)
+	if path == "" {
+		return "(read error: missing 'path')"
+	}
+	abs := expandPath(shell, path)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return fmt.Sprintf("(read error: %v)", err)
+	}
+	s := string(data)
+
+	startF, _ := args["start"].(float64)
+	endF, _ := args["end"].(float64)
+	startLine, endLine := 1, -1
+	if startF > 0 {
+		startLine = int(startF)
+	}
+	if endF > 0 {
+		endLine = int(endF)
+	}
+
+	rangeNote := ""
+	if startLine > 1 || (endLine > 0 && endLine < len(strings.Split(s, "\n"))) {
+		lines := strings.Split(s, "\n")
+		n := len(lines)
+		a, b := startLine, n
+		if endLine > 0 && endLine < b {
+			b = endLine
+		}
+		if a > b || a > n {
+			return fmt.Sprintf("(read: empty range; file has %d lines)", n)
+		}
+		s = strings.Join(lines[a-1:b], "\n")
+		rangeNote = fmt.Sprintf(", lines %d-%d of %d", a, b, n)
+	}
+
+	total := len(data)
+	if len(s) > maxReadResult {
+		half := maxReadResult / 2
+		cut := s[half:]
+		s = s[:half] + fmt.Sprintf("\n…[truncated; %d bytes total — use start/end to page]…\n", total) + cut[len(cut)-half:]
+	}
+	return fmt.Sprintf("[read %s (%d bytes%s)]\n%s", abs, total, rangeNote, s)
+}
+
+func toolWrite(shell *shell, args map[string]any) string {
+	path, _ := args["path"].(string)
+	content, _ := args["content"].(string)
+	if path == "" || content == "" {
+		return "(write error: 'path' and 'content' are required)"
+	}
+	abs := expandPath(shell, path)
+	if dir := filepath.Dir(abs); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Sprintf("(write error: %v)", err)
+		}
+	}
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+		return fmt.Sprintf("(write error: %v)", err)
+	}
+	return fmt.Sprintf("wrote %d bytes to %s", len([]byte(content)), abs)
+}
+
+func toolEdit(shell *shell, args map[string]any) string {
+	path, _ := args["path"].(string)
+	oldT, _ := args["old_text"].(string)
+	newT, _ := args["new_text"].(string)
+	replaceAll, _ := args["replace_all"].(bool)
+	if path == "" || oldT == "" {
+		return "(edit error: 'path' and 'old_text' are required)"
+	}
+	if oldT == newT {
+		return "(edit error: old_text and new_text are identical; nothing to do)"
+	}
+	abs := expandPath(shell, path)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return fmt.Sprintf("(edit error: %v)", err)
+	}
+	n := strings.Count(string(data), oldT)
+	switch {
+	case n == 0:
+		return "(edit error: old_text not found in file)"
+	case n > 1 && !replaceAll:
+		return fmt.Sprintf("(edit error: old_text matches %d places; add more surrounding context or set replace_all=true)", n)
+	}
+	out := string(data)
+	if replaceAll {
+		out = strings.ReplaceAll(out, oldT, newT)
+	} else {
+		out = strings.Replace(out, oldT, newT, 1)
+	}
+	if err := os.WriteFile(abs, []byte(out), 0o644); err != nil {
+		return fmt.Sprintf("(edit error: %v)", err)
+	}
+	what := "replaced"
+	if replaceAll {
+		what = fmt.Sprintf("replaced %d occurrences", n)
+	}
+	return fmt.Sprintf("%s in %s (%d bytes now)", what, abs, len(out))
 }
 
 // waitStdin блокирует ожидание одной строки из corrCh (без таймаута).
@@ -204,28 +396,18 @@ type chatMsg struct {
 
 func systemPrompt() string {
 	return "You are a focused sub-agent with full freedom to act on this machine. " +
-		"You have one tool, run_command: it runs a shell command in a PERSISTENT bash (cwd is kept between calls). " +
-		"Work step by step (e.g. ls, then cd, then inspect/run). Prefer small verifiable commands. " +
-		"When the task is done, stop calling tools and reply with a short final summary."
+		"You have four tools: run_command (shell command in a PERSISTENT bash, cwd is kept between calls), " +
+		"read (file text; optional 1-based start/end line range), write (create or overwrite a file) and edit (exact old_text → new_text replacement). " +
+		"Relative paths resolve against the persistent shell's current directory. Prefer read/write/edit over cat/sed for files. " +
+		"Work step by step; prefer small verifiable actions. When the task is done, stop calling tools and reply with a short final summary."
 }
 
 func chatOnce(client *http.Client, ep endpoint, messages []chatMsg) (respChatResponse, error) {
 	reqBody := map[string]any{
 		"model":    flagModel,
 		"messages": messages,
-		"tools": []map[string]any{{
-			"type": "function",
-			"function": map[string]any{
-				"name":        "run_command",
-				"description": "Run a shell command on this machine in a persistent bash. Returns stdout+stderr and exit code.",
-				"parameters": map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"command": map[string]any{"type": "string"}},
-					"required":   []string{"command"},
-				},
-			},
-		}},
-		"stream": false,
+		"tools":    beeTools(),
+		"stream":   false,
 	}
 	payload, _ := json.Marshal(reqBody)
 
