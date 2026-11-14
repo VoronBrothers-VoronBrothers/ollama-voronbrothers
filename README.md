@@ -9,7 +9,7 @@
 Наша цель - многочасовая эффективная работа клиентов с полным доступом к системе, чтобы агент чувствовал себя в системе как у себя дома (все риски на пользователе или ограничивайте доступ через shift + tab).
 
 > **Сборка и установка.** Форк собирается из исходников, бинарники с ollama.com его не включают.
-> Сборка всегда обоих бинарников (`ollama` + `lama`) — скриптом **[`scripts/voron-build.sh`](scripts/voron-build.sh)**:
+> Сборка всегда всех трёх бинарников (`ollama`, `lama`, `bee`) — скриптом **[`scripts/voron-build.sh`](scripts/voron-build.sh)**:
 > сам определяет версию `<upstream>-voron-<DDMMYYYY>`, ставит `-tags sqlite_fts5` и ldflags,
 > делает бэкапы и атомарную подмену (`sudo mv`, не `cp`).
 > Правила версионирования, systemd drop-in'ы и ручной вариант — в [VORON-RUNBOOK.md](VORON-RUNBOOK.md).
@@ -44,22 +44,36 @@
 Отдельный бинарник для мгновенного запуска полноценного TUI (bubbletea) без приветственного меню:
 
 ```bash
-lama              # → TUI с моделью из LAMA_MODEL
+lama              # → TUI с моделью по умолчанию
 lama llama3       # → TUI с моделью "llama3"
 ```
 
-Модель по умолчанию: env var `LAMA_MODEL` (в systemd-сервисе задан `orchestrator`),
-fallback — хардкод `"ollama-model"`. Внутренне вызывает `cmd.LaunchModelTUI`, минуя welcome/menu.
+Модель по умолчанию — `envconfig.DefaultModel` (единый источник для всех бинарников,
+override через env var `LAMA_MODEL`). Внутренне вызывает `cmd.LaunchModelTUI`, минуя welcome/menu.
 
-**Собирается и ставится только парой с `ollama`** — тем же `scripts/voron-build.sh`
-(свой сборкой lama быстро устаревает; прецедент 08.11: PDF в `/add` был только в одном бинарнике).
+**Собирается и ставится только вместе с остальными** — тем же `scripts/voron-build.sh`
+(отдельная сборка lama быстро устаревает; прецедент 08.11: PDF в `/add` был только в одном бинарнике).
 Вручную (только для отладки): `go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version=..." -o lama ./lama/`
 
 ### Инструменты агента по умолчанию
 
 `bash`, `bash_long`, `read`, `edit`, `write`; для мультимодальных моделей — `view_image`.
-Опционально: `skill` (если есть каталог скиллов), `web_search` / `web_fetch` и MCP-серверы.
+Опционально: `skill` (если есть каталог скиллов), `web_search` / `web_fetch`, MCP-серверы и `delegate`.
 Отключение через переменные окружения, напр. `OLLAMA_AGENT_DISABLE_SHELL`, `OLLAMA_AGENT_DISABLE_WEBSEARCH`.
+
+### Под-агенты: инструмент `delegate` + бинарник `bee`
+
+`delegate` запускает под-агентов как отдельные живые tmux-сессии (бинарник `bee`).
+Действия: `spawn` (старт с задачей), `list`, `models` (доступные «мозги»: облачные из
+`providers.json` + локальные из `/api/tags`), `output` (хвост пейна, опц. `lines`),
+`stop`, `feed` (сообщение до или во время работы), `pause`/`resume`. Под-агенты имеют
+полную свободу; вы наблюдаете их вывод и направляете.
+
+- **Модель «мозга»** — аргумент `model` в spawn; дефолт = `envconfig.DefaultModel`,
+  override env var `BEE_AGENT_MODEL`. Перед спавном модель проверяется (guard):
+  нет ни в providers, ни локально → явная ошибка вместо тишайшего 404 внутри сессии.
+- **Инструменты под-агента**: `run_command` (персистентный bash, дедлайн 30с на команду),
+  `read` / `write` / `edit` — прямые file-инструменты без round-trip через shell.
 
 ### Внешние провайдеры (external API)
 
