@@ -79,6 +79,7 @@ type Options struct {
 	PollCloudAuth               func(context.Context) (string, bool, error)
 	CompactionThreshold         float64
 	SystemPrompt                string
+	InitialPrompt               string
 }
 
 type Result struct {
@@ -260,6 +261,14 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	if opts.PreloadModel != nil && strings.TrimSpace(opts.Model) != "" && !m.openModelOnInit {
 		m.preloadingModel = strings.TrimSpace(opts.Model)
+	}
+
+	// InitialPrompt: pre-fill input and auto-send shortly after TUI starts.
+	if opts.InitialPrompt != "" {
+		m.input = []rune(opts.InitialPrompt)
+		m.autoSendDuration = 1 * time.Second
+		m.autoSendDirty = true
+		m.lastInputAt = time.Now()
 	}
 
 	p := tea.NewProgram(m, tea.WithReportFocus())

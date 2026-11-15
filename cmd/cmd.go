@@ -715,17 +715,101 @@ func loadOrUnloadModel(cmd *cobra.Command, opts *runOptions) error {
 }
 
 func StopHandler(cmd *cobra.Command, args []string) error {
+	client, _ := api.ClientFromEnvironment()
+
+	// No arg or "all" → stop all running models
+	if len(args) == 0 || args[0] == "all" {
+		running, err := client.ListRunning(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if len(running.Models) == 0 {
+			fmt.Println("No models are currently running.")
+			return nil
+		}
+		for _, m := range running.Models {
+			opts := &runOptions{
+				Model:     m.Name,
+				KeepAlive: &api.Duration{Duration: 0},
+			}
+			if err := loadOrUnloadModel(cmd, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: unable to stop model '%s'\n", m.Name)
+			}
+		}
+		return nil
+	}
+
+	arg := args[0]
+
+	// Numeric arg → resolve by position in running list
+	if idx, err := strconv.Atoi(arg); err == nil {
+		running, err := client.ListRunning(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if idx < 1 || idx > len(running.Models) {
+			return fmt.Errorf("model #%d not found (running models: %d)", idx, len(running.Models))
+		}
+		arg = running.Models[idx-1].Name
+	}
+
 	opts := &runOptions{
-		Model:     args[0],
+		Model:     arg,
 		KeepAlive: &api.Duration{Duration: 0},
 	}
 	if err := loadOrUnloadModel(cmd, opts); err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return fmt.Errorf("couldn't find model \"%s\" to stop", args[0])
+			return fmt.Errorf("couldn't find model \"%s\" to stop", arg)
 		}
 		return err
 	}
 	return nil
+}
+
+func TUIHandler(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		fmt.Println("Usage: ollama tui MODEL [PROMPT]")
+		fmt.Println("Starts an interactive agent TUI session with a model.")
+		fmt.Println("See `ollama list` for available models.")
+		return nil
+	}
+
+	modelName := args[0]
+	var initialPrompt string
+	if len(args) > 1 {
+		initialPrompt = strings.Join(args[1:], " ")
+	}
+
+	client, err := api.ClientFromEnvironment()
+	if err != nil {
+		return err
+	}
+
+	// Validate model exists
+	_, err = client.Show(cmd.Context(), &api.ShowRequest{Model: modelName})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "model \"%s\" not found. See `ollama list` for available models.\n", modelName)
+		return fmt.Errorf("model not found")
+	}
+
+	opts := agentTUIOptions{
+		Model:         modelName,
+		Options:       map[string]any{},
+		AllowAllTools: true,
+		InitialPrompt: initialPrompt,
+	}
+
+	info, err := prepareAgentModel(cmd, client, &opts, false)
+	if err != nil {
+		return err
+	}
+	opts.System = info.System
+
+	if err := saveLastAgentModel(opts.Model); err != nil {
+		return err
+	}
+
+	return GenerateAgentTUI(cmd, client, opts)
 }
 
 func generateEmbedding(cmd *cobra.Command, modelName, input string, keepAlive *api.Duration, truncate *bool, dimensions int) error {
@@ -1341,7 +1425,7 @@ func ListRunningHandler(cmd *cobra.Command, args []string) error {
 
 	var data [][]string
 
-	for _, m := range models.Models {
+	for i, m := range models.Models {
 		if len(args) == 0 || strings.HasPrefix(m.Name, args[0]) {
 			var procStr string
 			switch {
@@ -1368,12 +1452,12 @@ func ListRunningHandler(cmd *cobra.Command, args []string) error {
 			if m.ContextLength > 0 {
 				ctxStr = strconv.Itoa(m.ContextLength)
 			}
-			data = append(data, []string{m.Name, shortDigest(m.Digest), format.HumanBytes(m.Size), procStr, ctxStr, m.Runner, until})
+			data = append(data, []string{strconv.Itoa(i + 1), m.Name, shortDigest(m.Digest), format.HumanBytes(m.Size), procStr, ctxStr, m.Runner, until})
 		}
 	}
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"NAME", "ID", "SIZE", "PROCESSOR", "CONTEXT", "RUNNER", "UNTIL"})
+	table.SetHeader([]string{"#", "NAME", "ID", "SIZE", "PROCESSOR", "CONTEXT", "RUNNER", "UNTIL"})
 	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
 	table.SetAlignment(tablewriter.ALIGN_LEFT)
 	table.SetHeaderLine(false)
@@ -2819,11 +2903,18 @@ runCmd := &cobra.Command{
 	chatCmd.Flags().Var(questionFlag{"level", &chatAsked}, "level", "Add a level to score the preceding --ask on, from lowest to highest")
 
 	stopCmd := &cobra.Command{
-		Use:     "stop MODEL",
-		Short:   "Stop a running model",
-		Args:    cobra.ExactArgs(1),
+		Use:     "stop [MODEL|NUMBER|all]",
+		Short:   "Stop a running model (by name, number, or 'all')",
+		Args:    cobra.MaximumNArgs(1),
 		PreRunE: checkServerHeartbeat,
 		RunE:    StopHandler,
+	}
+
+	tuiCmd := &cobra.Command{
+		Use:   "tui [MODEL] [PROMPT...]",
+		Short: "Start an interactive agent TUI session with a model",
+		Args:  cobra.ArbitraryArgs,
+		RunE:  TUIHandler,
 	}
 
 	serveCmd := &cobra.Command{
@@ -2952,6 +3043,7 @@ runCmd := &cobra.Command{
 		runCmd,
 		chatCmd,
 		stopCmd,
+		tuiCmd,
 		pullCmd,
 		pushCmd,
 		listCmd,
@@ -3000,6 +3092,7 @@ runCmd := &cobra.Command{
 		runCmd,
 		chatCmd,
 		stopCmd,
+		tuiCmd,
 		pullCmd,
 		pushCmd,
 		signinCmd,

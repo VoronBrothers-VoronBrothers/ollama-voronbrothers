@@ -38,6 +38,7 @@ type agentTUIOptions struct {
 	AllowAllTools       bool
 	ToolsDisabled       bool
 	MultiModal          bool
+	InitialPrompt       string
 }
 
 func saveLastAgentModel(model string) error {
@@ -179,6 +180,7 @@ func GenerateAgentTUI(cmd *cobra.Command, client *api.Client, opts agentTUIOptio
 		KeepAlive:           opts.KeepAlive,
 		MultiModal:          opts.MultiModal,
 		AllowAllTools:       opts.AllowAllTools,
+		InitialPrompt:       opts.InitialPrompt,
 		ContextWindowTokens: opts.ContextWindowTokens,
 		Compactor: &coreagent.SimpleCompactor{
 			Client:  client,
