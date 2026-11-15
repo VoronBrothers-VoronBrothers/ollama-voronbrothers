@@ -170,7 +170,7 @@ const envFileTemplate = `# =====================================================
 # Built-in default model is proxyapi/deepseek/deepseek-v4.1-flash-1017 (single
 # source of truth: envconfig.DefaultModel). Uncomment to override the TUI
 # launcher's default model.
-# LAMA_MODEL=proxyapi/deepseek/deepseek-v4.1-flash-1017
+# LAMA_MODEL=lama
 
 # Override the sub-agent (bee) brain model. Built-in default: same as above.
 # BEE_AGENT_MODEL=proxyapi/deepseek/deepseek-v4.1-flash-1017
