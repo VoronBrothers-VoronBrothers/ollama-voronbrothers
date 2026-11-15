@@ -166,6 +166,7 @@ type chatModel struct {
 	autoSendDuration   time.Duration
 	lastInputAt        time.Time
 	autoSendDirty      bool
+	initialAutoSend    bool // one-shot: reset to default after InitialPrompt fires
 	heartbeatMsg       string
 	heartbeatInterval  time.Duration
 	heartbeatCount     int // HBCOUNT-DEFAULT: лимит сообщений (0=безлимит)
@@ -268,6 +269,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		m.input = []rune(opts.InitialPrompt)
 		m.autoSendDuration = 1 * time.Second
 		m.autoSendDirty = true
+		m.initialAutoSend = true
 		m.lastInputAt = time.Now()
 	}
 
@@ -320,7 +322,15 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.running && !m.compacting && m.preloadingModel == "" {
 			if m.autoSendDirty && m.autoSendDuration > 0 {
 				if time.Since(m.lastInputAt) >= m.autoSendDuration {
-					return m.handleSubmit()
+					model, cmd := m.handleSubmit()
+					cm := model.(chatModel)
+					if cm.initialAutoSend {
+						// one-shot: restore default auto-send after InitialPrompt fires
+						cm.initialAutoSend = false
+						cm.autoSendDuration = 600 * time.Second
+						cm.autoSendDirty = false
+					}
+					return cm, cmd
 				}
 				cmd := m.scheduleTick()
 				return m, cmd
