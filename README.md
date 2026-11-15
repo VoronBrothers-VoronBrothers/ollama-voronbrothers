@@ -55,6 +55,33 @@ override через env var `LAMA_MODEL`). Внутренне вызывает `
 (отдельная сборка lama быстро устаревает; прецедент 08.11: PDF в `/add` был только в одном бинарнике).
 Вручную (только для отладки): `go build -tags sqlite_fts5 -ldflags "-X github.com/ollama/ollama/version.Version=..." -o lama ./lama/`
 
+### TUI через CLI: `ollama tui`
+
+Запуск полноценного agent-TUI (bubbletea + инструменты) прямо из `ollama` без отдельного бинарника.
+Модель указывается явно в аргументе (в отличие от `lama`, где она берётся из env).
+Спроектирован для **оркестрации**: встраивается в пайплайны, tmux-скрипты, цепочки команд.
+
+```bash
+ollama tui                          # подсказка + exit 0 (без интерактивного меню)
+ollama tui lama                     # → TUI с моделью "lama"
+ollama tui bread                    # model not found → stderr + exit 1
+ollama tui lama 'продолжи работать'   # → TUI стартует, промпт авто-отправляется через ~1с
+```
+
+Pipeline-пример:
+```bash
+ollama stop; ollama tui lama 'ты продолжаешь задачу, контекст в /home/voron/.ollama/chats/123.json'
+```
+
+### Управляющие команды: `stop`, `ps`
+
+| Команда | Действие |
+|---------|----------|
+| `ollama stop` / `ollama stop all` | Выгружает **все** модели из памяти |
+| `ollama stop 1` | Выгружает модель под номером 1 в списке `ps` |
+| `ollama stop <name>` | Выгружает модель по имени (как раньше) |
+| `ollama ps` | Список запущенных моделей **с порядковым номером** (`#`) |
+
 ### Инструменты агента по умолчанию
 
 `bash`, `bash_long`, `read`, `edit`, `write`; для мультимодальных моделей — `view_image`.
