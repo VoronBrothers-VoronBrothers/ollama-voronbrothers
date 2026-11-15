@@ -25,7 +25,7 @@ import (
 var (
 	flagModel  string
 	flagTask   string
-	maxRoundsN = 24 // защита от бесконечного loop
+	maxRoundsN = 40 // защита от бесконечного loop
 	// cmdTimeout — дедлайн на ОДНУ команду run_command у под-агента.
 	// Жёсткий потолок 30с: иначе висящая команда держит tmux-pane «замороженным»
 	// и саб-агент зависает в терминале (основной bumblebee это не трогает).
@@ -138,12 +138,19 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 
 	for {
 		pending := drainCorrections(corrCh)
+		corrections := 0
 		for _, p := range pending {
 			if p == "" {
 				continue
 			}
+			corrections++
 			fmt.Printf("USER (correction): %s\n", p)
 			messages = append(messages, chatMsg{Role: "user", Content: "Correction from supervisor (apply it): " + p})
+		}
+		// Supervisor correction = агенту даём второй шанс: полный бюджет раундов.
+		if corrections > 0 {
+			left = maxRoundsN
+			fmt.Printf("[bee] rounds reset by supervisor correction (%d left)\n", left)
 		}
 
 		resp, err := chatOnce(client, ep, messages)
