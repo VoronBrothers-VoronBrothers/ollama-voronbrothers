@@ -331,6 +331,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// лимит исчерпан — останавливаем heartbeat
 				cm.heartbeatInterval = 0
 				cm.heartbeatMsg = ""
+				cm.heartbeatCount = 0
 				cmds := []tea.Cmd{}
 				if cmd != nil {
 					cmds = append(cmds, cmd)
