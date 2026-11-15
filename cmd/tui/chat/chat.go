@@ -15,7 +15,6 @@ import (
 
 	coreagent "github.com/ollama/ollama/agent"
 	"github.com/ollama/ollama/api"
-	"github.com/ollama/ollama/cmd/internal/filedata"
 )
 
 var chatSpinnerFrames = []string{".", "..", "..."}
@@ -25,7 +24,7 @@ var chatRuntimeGOOS = runtime.GOOS
 const (
 	maxPickerItems            = 8
 	maxInlineModelPickerItems = 30
-	maxSlashCompletions       = 5
+	maxSlashCompletions       = 6
 	maxPromptHistory          = 50
 	idleWorkingDelayTicks     = 4
 )
@@ -168,7 +167,8 @@ type chatModel struct {
 	autoSendDirty      bool
 	heartbeatMsg       string
 	heartbeatInterval  time.Duration
-	err                error
+	heartbeatCount     int // HBCOUNT-DEFAULT: лимит сообщений (0=безлимит)
+	err               error
 }
 
 type chatSelectionPoint struct {
@@ -234,6 +234,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		approvalState:      approvalState,
 		defaultAllowAll:    opts.AllowAllTools,
 		autoSendDuration:   600 * time.Second, // AUTOSEND-DEFAULT: 10 min, изменить здесь (поиск: AUTOSEND-DEFAULT)
+		heartbeatCount:    100,              // HBCOUNT-DEFAULT: лимит heartbeat-сообщений, изменить здесь
 		promptHistory:      initialPromptHistory(ctx, opts),
 		status:             "ready",
 		openModelOnInit:    opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
@@ -323,13 +324,26 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case heartbeatTickMsg:
 		if !m.running && !m.compacting && m.heartbeatMsg != "" && m.heartbeatInterval > 0 {
-			next := tea.Tick(m.heartbeatInterval, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
+			remaining := m.heartbeatCount - 1 // текущее сообщение засчитывается
 			model, cmd := m.startRun(m.heartbeatMsg)
+			cm := model.(chatModel)
+			if m.heartbeatCount > 0 && remaining <= 0 {
+				// лимит исчерпан — останавливаем heartbeat
+				cm.heartbeatInterval = 0
+				cm.heartbeatMsg = ""
+				cmds := []tea.Cmd{}
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return cm, tea.Batch(cmds...)
+			}
+			cm.heartbeatCount = remaining
+			next := tea.Tick(m.heartbeatInterval, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
 			cmds := []tea.Cmd{next}
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			return model, tea.Batch(cmds...)
+			return cm, tea.Batch(cmds...)
 		}
 		if m.heartbeatMsg != "" && m.heartbeatInterval > 0 {
 			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return heartbeatTickMsg{} })
@@ -1212,17 +1226,18 @@ func (m *chatModel) userMessageFromInput(displayInput, userInput string) (string
 	}
 	extracted := 0
 
-	if m.opts.MultiModal {
-		cleaned, files, err := filedata.ExtractWithFiles(content)
-		if err != nil {
-			return "", api.Message{}, err
-		}
-		content = cleaned
-		extracted = len(files)
-		for _, file := range files {
-			images = append(images, file.Data)
-		}
-	}
+	// Путь изображения остаётся текстом в content; модель сама вызовет view_image.
+	// if m.opts.MultiModal {
+	// 	cleaned, files, err := filedata.ExtractWithFiles(content)
+	// 	if err != nil {
+	// 		return "", api.Message{}, err
+	// 	}
+	// 	content = cleaned
+	// 	extracted = len(files)
+	// 	for _, file := range files {
+	// 		images = append(images, file.Data)
+	// 	}
+	// }
 	m.opts.Images = nil
 	m.inputAttachments = nil
 	m.inputPastedTexts = nil

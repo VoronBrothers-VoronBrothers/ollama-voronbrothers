@@ -31,21 +31,12 @@ func TestChatStartRunAttachesDroppedImagePath(t *testing.T) {
 	if len(m.liveMessages) != 1 {
 		t.Fatalf("liveMessages = %d, want 1", len(m.liveMessages))
 	}
-	if got := m.liveMessages[0].Content; got != "describe" {
-		t.Fatalf("content = %q, want describe", got)
+	// Path stays as plain text; model uses view_image tool.
+	if got := m.liveMessages[0].Content; !strings.Contains(got, fp) {
+		t.Fatalf("content = %q, want to contain file path %q", got, fp)
 	}
-	if got := len(m.liveMessages[0].Images); got != 1 {
-		t.Fatalf("images = %d, want 1", got)
-	}
-	if len(m.entries) == 0 {
-		t.Fatal("missing user transcript entry")
-	}
-	entry := m.entries[0].content
-	if strings.Contains(entry, fp) {
-		t.Fatalf("transcript entry should hide local file path: %q", entry)
-	}
-	if !strings.Contains(entry, "describe") || !strings.Contains(entry, "[attached 1 file]") {
-		t.Fatalf("transcript entry = %q, want prompt plus attachment note", entry)
+	if got := len(m.liveMessages[0].Images); got != 0 {
+		t.Fatalf("images = %d, want 0 (path stays text)", got)
 	}
 }
 
@@ -64,14 +55,12 @@ func TestChatStartRunAttachesDroppedFileURL(t *testing.T) {
 	updated, _ := m.startRun(fileURL)
 	m = updated.(chatModel)
 
-	if got := m.liveMessages[0].Content; got != "" {
-		t.Fatalf("content = %q, want empty prompt after extracting file URL", got)
+	// File URL stays as text; no binary extraction.
+	if got := m.liveMessages[0].Content; !strings.Contains(got, fileURL) {
+		t.Fatalf("content = %q, want to contain file URL", got)
 	}
-	if got := len(m.liveMessages[0].Images); got != 1 {
-		t.Fatalf("images = %d, want 1", got)
-	}
-	if got := m.entries[0].content; got != "[attached 1 file]" {
-		t.Fatalf("transcript entry = %q, want attachment-only note", got)
+	if got := len(m.liveMessages[0].Images); got != 0 {
+		t.Fatalf("images = %d, want 0 (path stays text)", got)
 	}
 }
 
@@ -224,8 +213,9 @@ func TestChatAbsoluteImagePathBypassesSlashCommandParsing(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("absolute image path should start a run instead of being parsed as a slash command")
 	}
-	if got := len(m.liveMessages[0].Images); got != 1 {
-		t.Fatalf("images = %d, want 1", got)
+	// Path stays as text; no binary attachment.
+	if got := len(m.liveMessages[0].Images); got != 0 {
+		t.Fatalf("images = %d, want 0 (path stays text)", got)
 	}
 	if got := m.entries[0].role; got != "user" {
 		t.Fatalf("entry role = %q, want user", got)

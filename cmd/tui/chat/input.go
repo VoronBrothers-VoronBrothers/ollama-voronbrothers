@@ -48,7 +48,7 @@ const (
 
 const (
 	pastedTextPlaceholderMinRunes = 1000
-	pastedTextPlaceholderMinLines = 8
+	pastedTextPlaceholderMinLines = 25
 )
 
 var chatSlashCommands = []chatSlashCommand{
@@ -68,6 +68,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
 	{name: "/heartbeat", usage: "/heartbeat \"текст\"", description: "periodically send a message to AI", aliases: []string{"/авторитм"}},
 	{name: "/heartbeat-time", usage: "/heartbeat-time <секунды>", description: "set heartbeat interval (0=off)", aliases: []string{"/авторитм-тайм"}},
+	{name: "/heartbeat-count", usage: "/heartbeat-count [кол-во]", description: "set heartbeat message limit (default 100, 0=unlimited)", aliases: []string{"/авторитм-количество"}},
 	{name: "/zip", usage: "/zip [on|off]", description: "toggle automatic context compaction (default on)", aliases: []string{"/зип"}},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
@@ -255,6 +256,25 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 				m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat интервал: %d с", n)}))
 				return *m, cmd
 			}
+		}
+		return *m, nil
+	case command == "/heartbeat-count" || command == "/авторитм-количество":
+		fields := strings.Fields(args)
+		if len(fields) != 1 {
+			// без аргумента — показать текущий лимит
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat count: осталось %d сообщений", m.heartbeatCount)}))
+			return *m, nil
+		}
+		n, err := strconv.Atoi(fields[0])
+		if err != nil || n < 0 {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Некорректное число. Использование: /heartbeat-count <кол-во сообщений>"}))
+			return *m, nil
+		}
+		m.heartbeatCount = n
+		if n == 0 {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Heartbeat count: безлимит"}))
+		} else {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat count: %d сообщений", n)}))
 		}
 		return *m, nil
 	case command == "/heartbeat" || command == "/авторитм":

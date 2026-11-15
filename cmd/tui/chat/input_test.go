@@ -522,7 +522,7 @@ func TestChatLargePasteUsesPlaceholderAndExpandsOnSubmit(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted), Paste: true})
 	m = updated.(chatModel)
-	if got, want := string(m.input), "[Pasted text #1 +8 lines]"; got != want {
+	if got, want := string(m.input), "[Pasted text #1 +25 lines]"; got != want {
 		t.Fatalf("input = %q, want %q", got, want)
 	}
 
@@ -542,9 +542,9 @@ func TestChatLargePasteUsesPlaceholderAndExpandsOnSubmit(t *testing.T) {
 
 func TestChatBackspaceDeletesWholePastedTextPlaceholder(t *testing.T) {
 	m := chatModel{
-		input: []rune("use [Pasted text #1 +8 lines]"),
+		input: []rune("use [Pasted text #1 +25 lines]"),
 		inputPastedTexts: []chatInputPastedText{{
-			placeholder: "[Pasted text #1 +8 lines]",
+			placeholder: "[Pasted text #1 +25 lines]",
 			content:     "hidden",
 		}},
 	}
