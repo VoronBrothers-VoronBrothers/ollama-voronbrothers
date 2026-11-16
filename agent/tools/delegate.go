@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,13 +32,14 @@ type Delegate struct {
 }
 
 type agentInfo struct {
-	id        string
-	session   string // tmux session name (уникальный, prefix bee-)
-	panePID   int    // pid верхнего процесса в пейне (для pause/resume)
-	task      string
-	model     string
-	paused    bool
-	spawnedAt time.Time
+	id          string
+	session     string // tmux session name (уникальный, prefix bee-)
+	panePID     int    // pid верхнего процесса в пейне (для pause/resume)
+	task        string
+	model       string
+	paused      bool
+	stoppedPids []int // все pids замороженные на паузе (для resume)
+	spawnedAt   time.Time
 }
 
 // beeDoneMarker — должен совпадать с doneMarker в bee/main.go.
@@ -165,9 +167,11 @@ func (d *Delegate) spawn(cwd, task, model, id string) (agent.ToolResult, error) 
 	}
 
 	cmdArgs := agentCommand(task, model) // команда «мозга» агента (bee / placeholder)
-	out, err := exec.CommandContext(context.Background(), "tmux", append([]string{
-		"new-session", "-d", "-s", session, "-c", cwd, "--",
-	}, cmdArgs...)...).CombinedOutput()
+	// ОДНА строка без `--`: tmux оборачивает её в собственный sh -c — это
+	// важно, см. agentCommand (setsid не может быть прямым ребёнком пейна).
+	out, err := exec.CommandContext(context.Background(), "tmux",
+		"new-session", "-d", "-s", session, "-c", cwd,
+		strings.Join(cmdArgs, " ")).CombinedOutput()
 	if err != nil {
 		return agent.ToolResult{Content: fmt.Sprintf("Error spawning agent %q: %v\n%s", id, err, strings.TrimSpace(string(out)))}, nil
 	}
@@ -195,13 +199,27 @@ func (d *Delegate) list() (agent.ToolResult, error) {
 	}
 	var b strings.Builder
 	for _, a := range infos {
-		status := "working"
+		status := "▶ working"
 		if a.paused {
-			status = "paused"
+			frozen := 0
+			for _, pid := range a.stoppedPids {
+				if procState(pid) == "T" {
+					frozen++
+				}
+			}
+			if frozen > 0 {
+				status = fmt.Sprintf("⏸ PAUSED (frozen %d pid)", frozen)
+			} else if tmuxSessionAlive(a.session) {
+				// Пауза «пометка» есть, но никто не застыл — честно пишем,
+				// что freeze потерян (например, всё дерево завершилось само).
+				status = "⚠️ PAUSE LOST"
+			} else {
+				status = "⏸ paused (session gone)"
+			}
 		} else if !tmuxSessionAlive(a.session) {
-			status = "dead"
+			status = "💀 dead"
 		} else if lastPaneLineIsDone(a.session) {
-			status = "done"
+			status = "✅ done"
 		}
 		fmt.Fprintf(&b, "- %s [%s] session=%s pid=%d age=%s\n    task: %s\n", a.id, status, a.session, a.panePID, time.Since(a.spawnedAt).Round(time.Second), a.task)
 	}
@@ -221,7 +239,11 @@ func (d *Delegate) output(id string, n int) (agent.ToolResult, error) {
 	if text == "" {
 		text = "(no output yet)"
 	}
-	return agent.ToolResult{Content: fmt.Sprintf("[agent %s] (last %d lines)\n%s", id, n, text)}, nil
+	status := ""
+	if !lastPaneLineIsDone(a.session) {
+		status = "\n⏳ AGENT IS STILL WORKING / АГЕНТ ЕЩЁ РАБОТАЕТ"
+	}
+	return agent.ToolResult{Content: fmt.Sprintf("[agent %s] (last %d lines)\n%s%s", id, n, text, status)}, nil
 }
 
 func (d *Delegate) stop(id string) (agent.ToolResult, error) {
@@ -229,11 +251,31 @@ func (d *Delegate) stop(id string) (agent.ToolResult, error) {
 	if a == nil {
 		return agent.ToolResult{Content: fmt.Sprintf("Error: no such agent %q", id)}, nil
 	}
+	// Снимаем дерево ДО убийства сессии: tmux kill-session шлёт сигналы только
+	// своим прямым детям, а setsid-мозг (и его дети) в чужой session — они бы
+	// выжили как сироты. Убиваем явно.
+	root := a.panePID
+	if p := panePIDOf(a.session); p > 0 {
+		root = p
+	}
+	tree := processTree(root)
 	out, _ := exec.Command("tmux", "kill-session", "-t", a.session).CombinedOutput()
+	killed := 0
+	for _, pid := range tree {
+		if pid <= 0 || procState(pid) == "" {
+			continue // уже не жив (tmux убил вместе с пейном)
+		}
+		_ = exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
+		killed++
+	}
 	d.mu.Lock()
 	delete(d.agents, id)
 	d.mu.Unlock()
-	return agent.ToolResult{Content: fmt.Sprintf("Stopped agent %q (killed tmux session %s)%s", id, a.session, suffix(out))}, nil
+	extra := ""
+	if killed > 0 {
+		extra = fmt.Sprintf(", force-killed %d leftover process(es)", killed)
+	}
+	return agent.ToolResult{Content: fmt.Sprintf("Stopped agent %q (killed tmux session %s%s)%s", id, a.session, extra, suffix(out))}, nil
 }
 
 func (d *Delegate) feed(id, message string) (agent.ToolResult, error) {
@@ -249,34 +291,175 @@ func (d *Delegate) feed(id, message string) (agent.ToolResult, error) {
 	return agent.ToolResult{Content: fmt.Sprintf("Sent to agent %q: %s", id, strings.ReplaceAll(msg, "\n", " "))}, nil
 }
 
+// pause — жёсткая пауза: SIGSTOP всему процессному дереву пейна сессии.
+//
+// Важно: останавливать ОДИН pane_pid недостаточно. tmux запускает команду
+// через shell-обёртку, а «мозг» (bee) и его дети (persistent bash, висящие
+// run_command) — отдельные процессы; SIGSTOP не наследуется. Если exec-
+// оптимизация шелла не сработала (спецсимволы в task), pane_pid ≠ pid мозга —
+// и агент продолжал работать после «паузы». Поэтому замораживаем всё дерево:
+// root первым (замороженный родитель больше никого не породит), затем все
+// потомки.
+//
+// Второй нюанс: tmux-сервер сам шлёт SIGCONT процессам пейна, почти сразу
+// после STOP. Обёртка шелла в любом случае оттаивает — это безвредно (она
+// просто ждёт), а мозг запускается через setsid (см. agentCommand) и потому
+// остаётся замороженным. После остановки даём tmux «отстреляться» SIGCONT
+// (~150мс) и честно отчитываемся, сколько процессов реально удержалось в T.
 func (d *Delegate) pause(id string) (agent.ToolResult, error) {
 	a := d.getAgent(id)
 	if a == nil {
 		return agent.ToolResult{Content: fmt.Sprintf("Error: no such agent %q", id)}, nil
 	}
-	out, err := exec.Command("kill", "-STOP", strconv.Itoa(a.panePID)).CombinedOutput()
+	// Пейн мог сменить root-процесс — берём актуальный pid.
+	root := a.panePID
+	if p := panePIDOf(a.session); p > 0 {
+		root = p
+		d.mu.Lock()
+		a.panePID = p
+		d.mu.Unlock()
+	}
+	// Сначала замораживаем root, И ТОЛЬ ПОТОМ снимаем /proc: замороженный
+	// родитель новых детей породить не может → снапшот дерева стабильный,
+	// «проскочивший» child (mid-fork на момент скана) не потеряется.
+	_ = exec.Command("kill", "-STOP", strconv.Itoa(root)).Run()
+	tree := processTree(root)
+	stopped, failed := 1, 0 // root уже остановлен (или мёртв — не важно)
+	for _, pid := range tree[1:] {
+		if pid <= 0 {
+			continue // kill -STOP 0 — сигнал всей группе вызывающего!
+		}
+		if err := exec.Command("kill", "-STOP", strconv.Itoa(pid)).Run(); err == nil {
+			stopped++
+		} else {
+			failed++ // процесс мог уже умереть — не страшно
+		}
+	}
+	// Ждём, пока tmux-сервер отправит свои SIGCONT, и считаем, кто реально застыл.
+	time.Sleep(150 * time.Millisecond)
+	holding := 0
+	for _, pid := range tree {
+		if procState(pid) == "T" {
+			holding++
+		}
+	}
 	d.mu.Lock()
 	a.paused = true
+	a.stoppedPids = tree
 	d.mu.Unlock()
-	if err != nil {
-		return agent.ToolResult{Content: fmt.Sprintf("Paused agent %q (SIGSTOP to pid %d): %v", id, a.panePID, err)}, nil
+	msg := fmt.Sprintf("Paused agent %q: SIGSTOP to %d process(es) (tree of pid %d), %d already gone; %d holding freeze", id, stopped, root, failed, holding)
+	if holding == 0 {
+		msg += " — WARNING: nothing stayed frozen (brain not setsid-detached?)"
 	}
-	return agent.ToolResult{Content: fmt.Sprintf("Paused agent %q (pid %d stopped)%s", id, a.panePID, suffix(out))}, nil
+	return agent.ToolResult{Content: msg}, nil
 }
 
+// procState — состояние процесса из /proc/<pid>/stat ('R','S','T',...).
+// Пусто, если процесс мёртв.
+func procState(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+	idx := strings.LastIndex(string(data), ")")
+	if idx < 0 || len(data) <= idx+2 {
+		return ""
+	}
+	fields := strings.Fields(string(data[idx+2:]))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// resume — SIGCONT всем pids, замороженным на паузе. Мертвые процессы не ошибка.
 func (d *Delegate) resume(id string) (agent.ToolResult, error) {
 	a := d.getAgent(id)
 	if a == nil {
 		return agent.ToolResult{Content: fmt.Sprintf("Error: no such agent %q", id)}, nil
 	}
-	out, err := exec.Command("kill", "-CONT", strconv.Itoa(a.panePID)).CombinedOutput()
 	d.mu.Lock()
-	a.paused = false
-	d.mu.Unlock()
-	if err != nil {
-		return agent.ToolResult{Content: fmt.Sprintf("Resumed agent %q (SIGCONT to pid %d): %v", id, a.panePID, err)}, nil
+	pids := a.stoppedPids
+	if len(pids) == 0 {
+		pids = processTree(a.panePID) // пауза не записала список (старая сессия)
 	}
-	return agent.ToolResult{Content: fmt.Sprintf("Resumed agent %q (pid %d continued)%s", id, a.panePID, suffix(out))}, nil
+	a.paused = false
+	a.stoppedPids = nil
+	d.mu.Unlock()
+	continued, failed := 0, 0
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		if err := exec.Command("kill", "-CONT", strconv.Itoa(pid)).Run(); err == nil {
+			continued++
+		} else {
+			failed++ // процесс завершился во время паузы — нормально
+		}
+	}
+	return agent.ToolResult{Content: fmt.Sprintf("Resumed agent %q: unfroze %d process(es), %d already exited", id, continued, failed)}, nil
+}
+
+// processTree возвращает root и всех его потомков (BFS: родитель раньше детей,
+// так что при последовательном SIGSTOP новые дети во время обхода не появятся).
+func processTree(root int) []int {
+	children := map[int][]int{}
+	entries, err := os.ReadDir("/proc")
+	if err != nil || root <= 0 {
+		return []int{root}
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if err != nil {
+			continue // процесс исчез между ReadDir и ReadFile — ок
+		}
+		children[parsePPID(string(data))] = append(children[parsePPID(string(data))], pid)
+	}
+	tree := []int{root}
+	queue := []int{root}
+	// seen — защита от циклов в ppid-графе (гонки /proc, pid-reuse):
+	// без него BFS может зациклиться и бесконечно раздувать память.
+	seen := map[int]bool{root: true}
+	// ВАЖНО: не `cur, queue := ...` — это бы создало новую локальную
+	// переменную queue (тенирование), appends летели бы в неё,
+	// а внешний queue остался бы {root} → бесконечный цикл.
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, k := range children[cur] {
+			if !seen[k] {
+				seen[k] = true
+				tree = append(tree, k)
+				queue = append(queue, k)
+			}
+		}
+	}
+	return tree
+}
+
+// parsePPID — ppid (поле 4) из /proc/<pid>/stat. comm-поле может содержать
+// пробелы и скобки, поэтому режем после последней ')': дальше идёт "state ppid ...".
+func parsePPID(stat string) int {
+	idx := strings.LastIndex(stat, ")")
+	if idx < 0 || len(stat) <= idx+2 {
+		return 0
+	}
+	fields := strings.Fields(stat[idx+2:])
+	if len(fields) < 2 {
+		return 0
+	}
+	ppid, _ := strconv.Atoi(fields[1])
+	return ppid
 }
 
 func (d *Delegate) getAgent(id string) *agentInfo {
@@ -289,17 +472,47 @@ func (d *Delegate) getAgent(id string) *agentInfo {
 //   - env BEE_AGENT_CMD — override (для теста/своей обёртки).
 //   - иначе бинарник bee ($BEE_BIN или /usr/local/bin/bee) с model+task;
 //   - если bee не найден — placeholder bash, чтобы control-plane работал.
+//
+// Команда оборачивается в `bash -c 'exec setsid -- ...'`: мозг попадает в
+// собственную process session. Это критично для pause(): tmux-сервер шлёт
+// SIGCONT процессам пейна почти сразу после STOP, размораживая их;
+// setsid-детаченный процесс от этих SIGCONT невосприимчив и остаётся
+// замороженным.
+//
+// НЮАНС: `setsid` НЕ может быть прямым ребёнком tmux-пейна. Пейн — group
+// leader, setsid() падает с EPERM, util-linux форкает себя, родитель
+// завершается → tmux видит «процесс пейна умер» и убивает пейн, а мозг
+// остаётся сиротой (работает, но вне дерева/управления). Поэтому setsid
+// запускаем из шелла: child шелла не group leader — setsid() проходит in-place.
 func agentCommand(task, model string) []string {
+	brain := brainArgs(task, model)
+	var b strings.Builder
+	for i, a := range brain {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(shellQuote(a))
+	}
+	// ОДНА строка: /bin/bash -c 'setsid -- <args>; exit $?'.
+	// setsid БЕЗ exec, как ребёнок нашего bash: с `exec` tmux-пейн умирал
+	// (EPERM-fork fallback убивал родителя), а обычный child проходит
+	// setsid() in-place. bash не group leader → fork не нужен.
+	return []string{"/bin/bash -c " + shellQuote("setsid -- " + b.String() + "; exit $?")}
+}
+
+// brainArgs — «голая» команда мозга без setsid-обёртки.
+func brainArgs(task, model string) []string {
 	if cmd := strings.TrimSpace(os.Getenv("BEE_AGENT_CMD")); cmd != "" {
-		return strings.Fields(cmd)
+		// Обёртка bash -c: строка с кавычками/спецсимволами не ломается
+		// от простого space-split (strings.Fields). Это test-only override.
+		return []string{"/bin/bash", "-c", cmd}
 	}
 	beePath := os.Getenv("BEE_BIN")
 	if beePath == "" {
 		beePath = "/usr/local/bin/bee"
 	}
 	if _, err := os.Stat(beePath); err == nil {
-		args := []string{beePath, "-model", model, "-task", task}
-		return args
+		return []string{beePath, "-model", model, "-task", task}
 	}
 	return []string{"/bin/bash", "-c", `echo "[bee] bee binary not found at ` + beePath + `; placeholder brain"; cat`}
 }
