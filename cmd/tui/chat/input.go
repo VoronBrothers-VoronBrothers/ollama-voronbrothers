@@ -65,7 +65,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/bye", description: "exit", aliases: []string{"/exit"}},
 	{name: "/prompt", description: "show full prompt, tools, and messages", aliases: []string{"/промт", "/промпт"}},
 	{name: "/очисточередь", description: "clear queued prompts", aliases: []string{"/clear"}},
-	{name: "/время", usage: "/время <секунды>", description: "set auto-send idle duration (seconds)"},
+	{name: "/enterwatch", usage: "/enterwatch [seconds]", description: "auto-send typed input to the agent after N seconds of idling (no arg = toggle on/off, default 120 s; 0=off)", aliases: []string{"/время"}},
 	{name: "/heartbeat", usage: "/heartbeat \"текст\"", description: "periodically send a message to AI", aliases: []string{"/авторитм"}},
 	{name: "/heartbeat-time", usage: "/heartbeat-time <секунды>", description: "set heartbeat interval (0=off)", aliases: []string{"/авторитм-тайм"}},
 	{name: "/heartbeat-count", usage: "/heartbeat-count [кол-во]", description: "set heartbeat message limit (default 100, 0=unlimited)", aliases: []string{"/авторитм-количество"}},
@@ -204,7 +204,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		m.pendingPrompts = nil
 		m.status = "ready"
 		return *m, nil
-	case strings.HasPrefix(command, "/время"):
+	// /enterwatch (алиас /время) — автоотправка набранного в поле ввода текста агенту.
+	case strings.HasPrefix(command, "/enterwatch"):
 		fields := strings.Fields(input)
 		if len(fields) == 1 {
 			// Toggle on/off; default ON = 120s
@@ -219,7 +220,7 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		} else {
 			n, err := strconv.Atoi(fields[1])
 			if err != nil || n < 0 {
-				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Некорректное время. Использование: /время <секунды>"}))
+				m.entries = append(m.entries, newChatEntry(chatEntry{role: "error", content: "Некорректное время. Использование: /enterwatch [секунды] (алиас: /время)"}))
 				return *m, nil
 			}
 			if n == 0 {
