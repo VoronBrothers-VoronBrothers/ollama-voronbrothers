@@ -86,6 +86,12 @@ func TestBashPersonalProfileAliasesAndHistory(t *testing.T) {
 	if !strings.Contains(string(data), "sayhi && echo env=$OLLAMA_TEST_ENV") {
 		t.Fatalf("command not recorded in history; got = %q", string(data))
 	}
+	// Human-readable: one entry per line, prefixed with "[YYYY-MM-DD HH:MM]".
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if !strings.HasPrefix(line, "[") || !strings.Contains(line, "] ") {
+			t.Fatalf("history line not human-readable (missing timestamp prefix); got = %q", line)
+		}
+	}
 }
 
 func TestBashPersonalProfileDisabledByEnv(t *testing.T) {

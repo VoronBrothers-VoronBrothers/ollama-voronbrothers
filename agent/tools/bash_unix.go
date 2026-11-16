@@ -41,9 +41,10 @@ const aliasPromotionScript = `while IFS= read -r _ollama_al; do
 done <<< "$(alias)"`
 
 // personalShellEnabled reports whether the agent's personal shell profile is
-// active: it sources a private rc/aliases file and appends every command to a
-// private history file under ~/.olsama/agent (see agentDir). Enabled by default;
-// set OLLAMA_BASH_PERSONAL to off|no|0|false to fall back to plain bash.
+// active: it sources a private rc/aliases file and appends a human-readable,
+// timestamped line per command ("[YYYY-MM-DD HH:MM] <command>") to a private
+// history file under ~/.ollama/agent (see agentDir). Enabled by default; set
+// OLLAMA_BASH_PERSONAL to off|no|0|false to fall back to plain bash.
 func personalShellEnabled() bool {
 	switch os.Getenv("OLLAMA_BASH_PERSONAL") {
 	case "0", "off", "no", "false":
@@ -81,7 +82,10 @@ func newBashCommand(ctx context.Context, command, cwdPath string) *exec.Cmd {
 	b.WriteString("pwd -P > " + shellQuote(cwdPath) + "\n")
 	if personal {
 		histQ := shellQuote(filepath.Join(dir, "history"))
-		b.WriteString("printf '%s\\n' " + shellQuote(command) + " >> " + histQ + "\n")
+		// Collapse the command to a single line so history stays one
+		// human-readable entry per call; prefix it with the local time.
+		flat := strings.Join(strings.Fields(command), " ")
+		b.WriteString("printf '[%s] %s\\n' \"$(date '+%Y-%m-%d %H:%M')\" " + shellQuote(flat) + " >> " + histQ + "\n")
 	}
 	b.WriteString("exit $__ollama_status")
 
