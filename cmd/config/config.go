@@ -32,6 +32,9 @@ type config struct {
 	LastSelection     string                  `json:"last_selection,omitempty"` // "run" or integration name
 	OnboardingVersion int                     `json:"onboarding_version,omitempty"`
 	DefaultThinkLevel string                  `json:"default_think_level,omitempty"`
+	// PredsaveCompaction — глобальный тумблер: сохранять JSON диалога перед
+	// компакцией (по умолчанию вкл.; nil = не задано = true).
+	PredsaveCompaction *bool `json:"predsave_compaction,omitempty"`
 }
 
 func NeedsWelcome() (bool, error) {
@@ -307,6 +310,27 @@ func SetDefaultThinkLevel(level string) error {
 		return err
 	}
 	cfg.DefaultThinkLevel = level
+	return save(cfg)
+}
+
+// PredsaveCompactionEnabled reports whether the dialog JSON auto-save before
+ // compaction is enabled. Unset (legacy config) means ON.
+func PredsaveCompactionEnabled() bool {
+	cfg, err := load()
+	if err != nil {
+		return true
+	}
+	return cfg.PredsaveCompaction == nil || *cfg.PredsaveCompaction
+}
+
+// SetPredsaveCompaction persists the global pre-compaction dialog save toggle.
+func SetPredsaveCompaction(enabled bool) error {
+	cfg, err := load()
+	if err != nil {
+		return err
+	}
+	v := enabled
+	cfg.PredsaveCompaction = &v
 	return save(cfg)
 }
 

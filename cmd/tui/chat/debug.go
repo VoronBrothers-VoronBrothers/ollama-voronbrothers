@@ -14,6 +14,7 @@ import (
 
 	coreagent "github.com/ollama/ollama/agent"
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/cmd/config"
 )
 
 type chatPromptDebug struct {
@@ -76,6 +77,31 @@ func (m *chatModel) handleZipCommand(args string) (tea.Model, tea.Cmd) {
 	} else {
 		m.entries = append(m.entries, newSlashEntry("автосжатие контекста включено"))
 	}
+	return *m, nil
+}
+
+// handlePredsaveCompactionCommand — глобальный тумблер: сохранять JSON диалога
+// перед компакцией (вкл/выкл, персистентно в ~/.ollama/config.json).
+func (m *chatModel) handlePredsaveCompactionCommand(args string) (tea.Model, tea.Cmd) {
+	var enabled bool
+	switch strings.ToLower(strings.TrimSpace(args)) {
+	case "":
+		enabled = !config.PredsaveCompactionEnabled()
+	case "on", "true", "вкл", "включить":
+		enabled = true
+	case "off", "false", "выкл", "выключить":
+		enabled = false
+	default:
+		return m.addDebugError(fmt.Errorf("usage: /predsave-compaction [on|off]"))
+	}
+	if err := config.SetPredsaveCompaction(enabled); err != nil {
+		return m.addDebugError(err)
+	}
+	state := "включено"
+	if !enabled {
+		state = "выключено"
+	}
+	m.entries = append(m.entries, newSlashEntry("пресейв диалога перед компакцией: "+state+" (глобально, ~/.ollama/config.json)"))
 	return *m, nil
 }
 

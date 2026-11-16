@@ -70,6 +70,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/heartbeat-time", usage: "/heartbeat-time <секунды>", description: "set heartbeat interval (0=off)", aliases: []string{"/авторитм-тайм"}},
 	{name: "/heartbeat-count", usage: "/heartbeat-count [кол-во]", description: "set heartbeat message limit (default 100, 0=unlimited)", aliases: []string{"/авторитм-количество"}},
 	{name: "/zip", usage: "/zip [on|off]", description: "toggle automatic context compaction (default on)", aliases: []string{"/зип"}},
+	{name: "/predsave-compaction", usage: "/predsave-compaction [on|off]", description: "globally toggle dialog JSON auto-save before compaction (default on; persisted in ~/.ollama/config.json)"},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save [filename|path]", description: "save request JSON to ~/.ollama/chats (or explicit path)"},
@@ -318,6 +319,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return m.resetChat("new chat")
 	case command == "/compact" && args == "":
 		return m.startManualCompaction()
+	case command == "/predsave-compaction":
+		return m.handlePredsaveCompactionCommand(args)
 	case skillOK:
 		return m.startSkillRun(skillName, skillPrompt)
 	case strings.HasPrefix(input, "/") && m.slashInputIsMultimodalFile(input):

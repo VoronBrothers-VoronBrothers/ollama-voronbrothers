@@ -740,6 +740,8 @@ func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOption
 	}
 	trigger := s.autoCompactionTrigger(req)
 	if trigger != "" {
+		// Пресейв: глобальный сейв JSON диалога перед компакцией (/predsave-compaction).
+		PredsaveDialogBeforeCompaction(req.Model, req.SystemPrompt, req.Messages)
 		s.emitCompactionStarted(runID, opts, trigger)
 	}
 	result, err := s.Compactor.MaybeCompact(ctx, req)

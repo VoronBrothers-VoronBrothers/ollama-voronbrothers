@@ -39,6 +39,10 @@ func (m *chatModel) startManualCompaction() (tea.Model, tea.Cmd) {
 	if m.opts.Tools != nil {
 		tools = m.opts.Tools.Tools()
 	}
+	// Пресейв: глобальный сейв JSON диалога перед компакцией (/predsave-compaction).
+	if p := coreagent.PredsaveDialogBeforeCompaction(m.opts.Model, m.systemPrompt(""), messages); p != "" {
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "system", content: "Пресейв перед компакцией: " + p}))
+	}
 	req := coreagent.CompactionRequest{
 		ChatID:       m.chatID,
 		Model:        m.opts.Model,
