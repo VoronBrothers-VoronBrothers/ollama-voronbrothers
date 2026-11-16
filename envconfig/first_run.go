@@ -184,6 +184,10 @@ const envFileTemplate = `# =====================================================
 # Disable the agent's delegate tool (sub-agent spawn/pause/feed/stop). Enabled by default.
 # OLLAMA_AGENT_DISABLE_DELEGATE=1
 
+# Disable the personal bash profile (rc.sh sourcing + alias promotion + history).
+# Set to off|no|0|false for plain bash without ~/.ollama/agent/rc.sh.
+# OLLAMA_BASH_PERSONAL=off
+
 # Extra skills directory for the agent.
 # OLLAMA_SKILLS=/home/user/.ollama/skills
 
