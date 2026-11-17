@@ -20,7 +20,8 @@ import (
 var chatSpinnerFrames = []string{".", "..", "..."}
 
 // workingPulseFrames — slow rotating half-moons for the persistent "Working" indicator.
-var workingPulseFrames = []string{"◐", "◑", "◒", "◓"}
+// Rotation: down → left → up → right (clockwise).
+var workingPulseFrames = []string{"◐", "◒", "◓", "◑"}
 
 const workingStallThreshold = 15 * time.Second // warn if no event for this long
 
