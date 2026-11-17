@@ -19,7 +19,7 @@ import (
 const (
 	bashTimeout = 40 * time.Second
 	// bashLongTimeout is the default deadline for the parallel `bash_long` tool,
-	// used when the caller omits the `timeout` argument (bounds: 60-400s).
+	// used when the caller omits the `timeout` argument (bounds: 60-900s).
 	bashLongTimeout    = 120 * time.Second // 2 minutes (BASH-LONG-DEFAULT)
 	bashWaitDelay      = 1 * time.Second
 	maxBashOutputBytes = 60_000

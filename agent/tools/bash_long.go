@@ -19,7 +19,7 @@ func bashLongName() string { return shellToolName() + "_long" }
 // (120 s) is used. BASH-LONG-BOUNDS: менять диапазон здесь.
 const (
 	bashLongMinTimeout = 60 * time.Second
-	bashLongMaxTimeout = 400 * time.Second // ~6-7 minutes
+	bashLongMaxTimeout = 900 * time.Second // ~15 minutes
 )
 
 // BashLong is a parallel shell tool identical to Bash in behaviour, but with a
@@ -44,7 +44,7 @@ func (b *BashLong) Name() string {
 }
 
 // Execute runs the embedded Bash with a per-call timeout taken from the optional
-// `timeout` argument in seconds (60-400; default 120 when absent or non-positive).
+// `timeout` argument in seconds (60-900; default 120 when absent or non-positive).
 // The deadline is only an upper bound: the result returns as soon as the command
 // finishes. A value copy of the shared *Bash is used so concurrent calls do not
 // race on state.
@@ -132,7 +132,7 @@ func formatDuration(d time.Duration) string {
 }
 
 func (b *BashLong) Description() string {
-	return "Run a shell command with an optional 'timeout' argument in seconds (60-400; default 120) for long-running jobs. Returns as soon as the command finishes, with combined output and the final working directory."
+	return "Run a shell command with an optional 'timeout' argument in seconds (60-900; default 120) for long-running jobs. Returns as soon as the command finishes, with combined output and the final working directory."
 }
 
 func (b *BashLong) Schema() api.ToolFunction {
@@ -143,7 +143,7 @@ func (b *BashLong) Schema() api.ToolFunction {
 	})
 	props.Set("timeout", api.ToolProperty{
 		Type:        api.PropertyType{"integer"},
-		Description: "Optional upper bound in seconds (60-400, default 120). Set it to the expected duration of the command; do not blindly use the maximum.",
+		Description: "Optional upper bound in seconds (60-900, default 120). Set it to the expected duration of the command; do not blindly use the maximum.",
 	})
 	return api.ToolFunction{
 		Name:        b.Name(),

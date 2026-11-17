@@ -15,7 +15,7 @@ func TestBashLongTimeoutClamp(t *testing.T) {
 	const (
 		wantDefault = 120 * time.Second
 		wantMin     = 60 * time.Second
-		wantMax     = 400 * time.Second
+		wantMax     = 900 * time.Second
 	)
 
 	// Guard the constants themselves: the numbers are also advertised to the
@@ -40,9 +40,9 @@ func TestBashLongTimeoutClamp(t *testing.T) {
 		{"explicit default", map[string]any{"command": "true", "timeout": 120.0}, 120 * time.Second},
 		{"inside range", map[string]any{"command": "true", "timeout": 300.0}, 300 * time.Second},
 		{"exactly min", map[string]any{"command": "true", "timeout": 60.0}, wantMin},
-		{"exactly max", map[string]any{"command": "true", "timeout": 400.0}, wantMax},
+		{"exactly max", map[string]any{"command": "true", "timeout": 900.0}, wantMax},
 		{"below min clamped", map[string]any{"command": "true", "timeout": 10.0}, wantMin},
-		{"above max clamped", map[string]any{"command": "true", "timeout": 900.0}, wantMax},
+		{"above max clamped", map[string]any{"command": "true", "timeout": 1200.0}, wantMax},
 		{"old max is clamped", map[string]any{"command": "true", "timeout": 1800.0}, wantMax},
 		{"zero falls back to default", map[string]any{"command": "true", "timeout": 0.0}, wantDefault},
 		{"negative falls back to default", map[string]any{"command": "true", "timeout": -5.0}, wantDefault},
@@ -83,7 +83,7 @@ func TestBashLongExecuteAppliesClampedTimeout(t *testing.T) {
 
 	result, err := tool.Execute(t.Context(), agent.ToolContext{}, map[string]any{
 		"command": shellTestCommand("echo hi", "Write-Output hi"),
-		"timeout": 900.0,
+		"timeout": 1200.0,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -92,8 +92,8 @@ func TestBashLongExecuteAppliesClampedTimeout(t *testing.T) {
 		t.Fatal("expected output from echo hi")
 	}
 
-	// A value above max must be reported as the clamped max, not as 900s.
-	clamped := tool.callTimeout(map[string]any{"timeout": 900.0})
+	// A value above max must be reported as the clamped max, not as 1200s.
+	clamped := tool.callTimeout(map[string]any{"timeout": 1200.0})
 	if clamped != bashLongMaxTimeout {
 		t.Fatalf("clamped timeout = %v, want %v", clamped, bashLongMaxTimeout)
 	}
