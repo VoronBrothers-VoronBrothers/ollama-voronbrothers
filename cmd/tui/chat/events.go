@@ -92,6 +92,7 @@ type heartbeatTickMsg struct{}
 
 func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 	contextChanged := false
+	m.lastEventAt = time.Now()
 
 	switch event.Type {
 	case coreagent.EventThinkingDelta:

@@ -19,6 +19,11 @@ import (
 
 var chatSpinnerFrames = []string{".", "..", "..."}
 
+// workingPulseFrames — slow rotating half-moons for the persistent "Working" indicator.
+var workingPulseFrames = []string{"◐", "◑", "◒", "◓"}
+
+const workingStallThreshold = 15 * time.Second // warn if no event for this long
+
 var chatRuntimeGOOS = runtime.GOOS
 
 const (
@@ -165,6 +170,7 @@ type chatModel struct {
 	eventErrorRendered bool
 	autoSendDuration   time.Duration
 	lastInputAt        time.Time
+	lastEventAt        time.Time // updated on every agent event for stall detection
 	autoSendDirty      bool
 	initialAutoSend    bool // one-shot: reset to default after InitialPrompt fires
 	heartbeatMsg       string

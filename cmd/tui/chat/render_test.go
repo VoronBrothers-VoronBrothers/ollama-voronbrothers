@@ -560,11 +560,11 @@ func TestChatViewKeepsInputBoxWhileRunning(t *testing.T) {
 		t.Fatalf("view missing input box: %q", view)
 	}
 	aboveIdx := prevNonEmptyLine(lines, inputLine)
-	if aboveIdx < 0 || !strings.Contains(lines[aboveIdx], "Thinking ↓ 42 tokens") {
-		t.Fatalf("thinking line should sit directly above input box:\n%s", view)
+	if aboveIdx < 0 || !strings.Contains(lines[aboveIdx], "Working [thinking ↓ 42 tokens]") {
+		t.Fatalf("working indicator line should sit directly above input box:\n%s", view)
 	}
 	if strings.Contains(lines[aboveIdx], "...") {
-		t.Fatalf("thinking line should not show spinner dots:\n%s", view)
+		t.Fatalf("working line should not show old spinner dots:\n%s", view)
 	}
 }
 
@@ -646,7 +646,7 @@ func TestChatViewSeparatesActionStatusFromTranscript(t *testing.T) {
 
 	lines := strings.Split(stripANSI(m.View()), "\n")
 	assistantLine := lineIndexContaining(lines, "Working through it.")
-	activityLine := lineIndexContaining(lines, "Thinking")
+	activityLine := lineIndexContaining(lines, "Working [thinking]")
 	if assistantLine < 0 || activityLine < 0 {
 		t.Fatalf("view missing assistant/activity lines:\n%s", strings.Join(lines, "\n"))
 	}

@@ -206,13 +206,14 @@ func TestActivityLineShowsWorkingAfterAssistantContentGoesIdle(t *testing.T) {
 	}
 
 	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventMessageDelta, Content: "I will inspect that next."})
-	if line := strings.TrimSpace(stripANSI(m.activityLine())); line != "" {
-		t.Fatalf("activityLine immediately after content = %q, want quiet until the idle delay", line)
+	// New behavior: persistent indicator always visible while running.
+	if line := strings.TrimSpace(stripANSI(m.activityLine())); !strings.Contains(line, "Working") {
+		t.Fatalf("activityLine after content = %q, want Working indicator", line)
 	}
 
-	m.spinner = idleWorkingDelayTicks
+	m.spinner = idleWorkingDelayTicks + 4
 	if line := stripANSI(m.activityLine()); !strings.Contains(line, "Working") {
-		t.Fatalf("activityLine after idle content stream = %q, want Working while stream remains open", line)
+		t.Fatalf("activityLine with spinner advanced = %q, want Working while stream remains open", line)
 	}
 }
 

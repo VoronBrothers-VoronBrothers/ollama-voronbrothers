@@ -1687,38 +1687,85 @@ func (m chatModel) activityLine() string {
 	if m.approvalPrompt != nil {
 		return ""
 	}
-	if m.preloadingModel != "" && !m.running && !m.compacting {
+	if !m.running && !m.compacting && m.preloadingModel == "" && m.status != "canceling" {
 		return ""
 	}
-	if !m.running && !m.compacting && m.preloadingModel == "" && m.approvalPrompt == nil {
-		return ""
+
+	// Cancel override
+	if m.status == "canceling" {
+		return statusWithSpinner(m.spinnerFrame(), "canceling")
 	}
-	if m.thinking && len(m.entries) > 0 {
-		entry := m.entries[len(m.entries)-1]
-		if entry.role == "thinking" && entry.status == "running" {
-			return ""
+
+	// Compacting — keep dedicated label with pulse
+	if m.compacting {
+		label := "Compacting"
+		if m.compactingTokens > 0 {
+			label = "Compacting " + formatTokenCount(m.compactingTokens)
 		}
+		return statusWithSpinner(m.workingPulseFrame(), label)
 	}
-	label := m.activityLabel()
-	if label == "" {
-		if m.awaitingToolStart() {
-			return statusWithSpinner(m.spinnerFrame(), "Working")
+
+	// Persistent indicator while model is running — always visible, phase-aware.
+	if m.running {
+		page := m.currentWorkingPhase()
+		base := "Working"
+		if page != "" {
+			base = "Working [" + page + "]"
 		}
-		if m.awaitingModel {
-			return statusWithSpinner(m.spinnerFrame(), "Working")
+		// Stall warning: no event for > threshold
+		if !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) > workingStallThreshold {
+			secs := int(time.Since(m.lastEventAt).Seconds())
+			base += fmt.Sprintf(" ⚠️ no data %ds", secs)
 		}
-		if !m.waitingForModel() || m.spinner < idleWorkingDelayTicks {
-			return ""
-		}
-		if m.preloadingModel != "" {
-			return statusWithSpinner(m.spinnerFrame(), "Working")
-		}
+		return statusWithSpinner(m.workingPulseFrame(), base)
+	}
+
+	// Preloading model
+	if m.preloadingModel != "" {
 		return statusWithSpinner(m.spinnerFrame(), "Working")
 	}
-	if m.thinking {
-		return label
+
+	return ""
+}
+
+// workingPulseFrame returns the current half-moon frame (slow ~1 cycle/sec).
+func (m chatModel) workingPulseFrame() string {
+	idx := m.spinner / 4 % len(workingPulseFrames)
+	return workingPulseFrames[idx]
+}
+
+// currentWorkingPhase returns a short label for what the model is doing now.
+func (m chatModel) currentWorkingPhase() string {
+	if m.thinking && m.thinkingTokens > 0 {
+		return "thinking ↓ " + formatTokenCount(m.thinkingTokens)
 	}
-	return statusWithSpinner(m.spinnerFrame(), label)
+	if m.thinking {
+		return "thinking"
+	}
+	// Active tool
+	start := m.currentTurnEntryStart()
+	for i := len(m.entries) - 1; i >= start; i-- {
+		entry := m.entries[i]
+		switch entry.role {
+		case "tool":
+			if isToolActiveStatus(entry.status) && entry.detail != "" {
+				return entry.detail
+			}
+		case "tool_group":
+			if entryHasActiveTool(entry) {
+				for _, tool := range entry.tools {
+					if isToolActiveStatus(tool.status) && tool.detail != "" {
+						return tool.detail
+					}
+				}
+			}
+		case "assistant":
+			if entry.content != "" && entry.outputTokens > 0 {
+				return "out ↓ " + formatTokenCount(entry.outputTokens)
+			}
+		}
+	}
+	return ""
 }
 
 func (m chatModel) activityLabel() string {

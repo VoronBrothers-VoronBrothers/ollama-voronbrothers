@@ -30,7 +30,7 @@ import (
 var (
 	flagModel  string
 	flagTask   string
-	maxRoundsN = 40 // защита от бесконечного loop
+	maxRoundsN = 300 // бюджет раундов на один запрос; сбрасывается при correction
 	// cmdTimeout — дедлайн на ОДНУ команду run_command у под-агента.
 	// Жёсткий потолок 30с: иначе висящая команда держит tmux-pane «замороженным»
 	// и саб-агент зависает в терминале (основной bumblebee это не трогает).
@@ -407,11 +407,9 @@ type chatMsg struct {
 }
 
 func systemPrompt() string {
-	return "You are a focused sub-agent with full freedom to act on this machine. " +
-		"You have four tools: run_command (shell command in a PERSISTENT bash, cwd is kept between calls), " +
-		"read (file text; optional 1-based start/end line range), write (create or overwrite a file) and edit (exact old_text → new_text replacement). " +
-		"Relative paths resolve against the persistent shell's current directory. Prefer read/write/edit over cat/sed for files. " +
-		"Work step by step; prefer small verifiable actions. When the task is done, stop calling tools and reply with a short final summary."
+	return "You are a focused sub-agent with tools: run_command (persistent bash, cwd persists), read (file text; optional start/end lines), write (create/overwrite file), edit (exact old→new replacement). Relative paths use the shell's cwd. Prefer read/write/edit over cat/sed/echo.\n" +
+		"Be economical: minimize tool calls. Don't re-read files you've already seen. Batch independent operations in one command where possible. If 2-3 searches clarify the task, stop searching and act. Keep responses short — no preamble, no restating the task. When done, reply with a concise final summary (~20 lines) and stop calling tools." +
+		"Work step by step; prefer small verifiable actions."
 }
 
 func chatOnce(client *http.Client, ep endpoint, messages []chatMsg) (respChatResponse, error) {
