@@ -3,6 +3,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	coreagent "github.com/ollama/ollama/agent"
 	"github.com/ollama/ollama/api"
@@ -214,6 +215,62 @@ func TestActivityLineShowsWorkingAfterAssistantContentGoesIdle(t *testing.T) {
 	m.spinner = idleWorkingDelayTicks + 4
 	if line := stripANSI(m.activityLine()); !strings.Contains(line, "Working") {
 		t.Fatalf("activityLine with spinner advanced = %q, want Working while stream remains open", line)
+	}
+}
+
+func TestWorkingLabelKeepsLastToolWhileAwaitingModel(t *testing.T) {
+	args := api.NewToolCallFunctionArguments()
+	args.Set("path", "README.md")
+	m := chatModel{running: true}
+
+	m.applyAgentEvent(coreagent.Event{
+		Type: coreagent.EventToolCallDetected,
+		ToolCalls: []api.ToolCall{{
+			ID:       "call-1",
+			Function: api.ToolCallFunction{Name: "edit", Arguments: args},
+		}},
+	})
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventToolStarted, ToolCallID: "call-1", ToolName: "edit", Args: args.ToMap()})
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventToolFinished, ToolCallID: "call-1", ToolName: "edit", Content: "ok"})
+
+	if got := m.currentWorkingPhase(); got != "edit" {
+		t.Fatalf("currentWorkingPhase = %q, want last tool name while awaiting model", got)
+	}
+	if line := stripANSI(m.activityLine()); !strings.Contains(line, "Working [edit]") {
+		t.Fatalf("activityLine = %q, want Working [edit] after fast tool finished", line)
+	}
+}
+
+func TestActivityLineSuppressesStallWhileToolRunning(t *testing.T) {
+	args := api.NewToolCallFunctionArguments()
+	args.Set("command", "sleep 900")
+	m := chatModel{running: true, lastEventAt: time.Now().Add(-20 * time.Second)}
+
+	m.applyAgentEvent(coreagent.Event{Type: coreagent.EventToolStarted, ToolCallID: "call-1", ToolName: "bash", Args: args.ToMap()})
+
+	line := stripANSI(m.activityLine())
+	if strings.Contains(line, "no data") {
+		t.Fatalf("activityLine = %q, want no stall warning while tool is running", line)
+	}
+	if !strings.Contains(line, "Working [bash]") {
+		t.Fatalf("activityLine = %q, want Working [bash] label for the active tool", line)
+	}
+}
+
+func TestActivityLineSuppressesStallWhileAwaitingModel(t *testing.T) {
+	m := chatModel{
+		running:       true,
+		awaitingModel: true,
+		lastEventAt:   time.Now().Add(-20 * time.Second),
+	}
+
+	if line := stripANSI(m.activityLine()); strings.Contains(line, "no data") {
+		t.Fatalf("activityLine = %q, want no stall warning while awaiting model", line)
+	}
+
+	m.awaitingModel = false
+	if line := stripANSI(m.activityLine()); !strings.Contains(line, "no data") {
+		t.Fatalf("activityLine = %q, want stall warning when stale and not awaiting", line)
 	}
 }
 

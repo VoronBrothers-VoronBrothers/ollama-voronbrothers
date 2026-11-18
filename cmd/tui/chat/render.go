@@ -1741,8 +1741,11 @@ func (m chatModel) activityLine() string {
 		if page != "" {
 			base = "Working [" + page + "]"
 		}
-		// Stall warning: no event for > threshold
-		if !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) > workingStallThreshold {
+		// Stall warning: no event for > threshold. Suppressed while a tool is
+		// active (long bash / edit / write runs) or the model response is
+		// awaited — silence in those states is expected, not a stall.
+		silenced := page != "" || m.awaitingModel
+		if !silenced && !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) > workingStallThreshold {
 			secs := int(time.Since(m.lastEventAt).Seconds())
 			base += fmt.Sprintf(" ⚠️ no data %ds", secs)
 		}
@@ -1757,7 +1760,7 @@ func (m chatModel) activityLine() string {
 	return ""
 }
 
-// workingPulseFrame returns the current half-moon frame (slow ~1 cycle/sec).
+// workingPulseFrame returns the current heartbeat-pulse frame (~1.4 s/frame).
 func (m chatModel) workingPulseFrame() string {
 	idx := m.spinner / 4 % len(workingPulseFrames)
 	return workingPulseFrames[idx]
@@ -1791,6 +1794,25 @@ func (m chatModel) currentWorkingPhase() string {
 		case "assistant":
 			if entry.content != "" && entry.outputTokens > 0 {
 				return "out ↓ " + formatTokenCount(entry.outputTokens)
+			}
+		}
+	}
+	// Fallback: between a tool result and the next model output we keep showing
+	// the last completed tool, so fast tools (edit/write) remain visible in
+	// "Working [..]" while the model processes their results.
+	if m.awaitingModel {
+		start := m.currentTurnEntryStart()
+		for i := len(m.entries) - 1; i >= start; i-- {
+			entry := m.entries[i]
+			switch entry.role {
+			case "tool":
+				if isToolResultStatus(entry.status) && entry.detail != "" {
+					return entry.detail
+				}
+			case "tool_group":
+				if n := len(entry.tools); n > 0 && entry.tools[n-1].detail != "" {
+					return entry.tools[n-1].detail
+				}
 			}
 		}
 	}
