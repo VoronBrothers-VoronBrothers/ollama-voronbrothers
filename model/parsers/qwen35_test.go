@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ollama/ollama/api"
@@ -511,5 +512,74 @@ func TestQwen35ParserThinkingTruncatedWithoutCloseTag(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Fatalf("expected no tool calls, got %d", len(calls))
+	}
+}
+
+// TestQwen35ParserSoftFailsMalformedToolCallXML verifies that a malformed
+// function/parameter XML tool call never kills the turn: Qwen35Parser must
+// return err == nil and either parse the call or emit the raw text as content.
+func TestQwen35ParserSoftFailsMalformedToolCallXML(t *testing.T) {
+	tools := []api.Tool{
+		{
+			Function: api.ToolFunction{
+				Name: "get_weather",
+				Parameters: api.ToolFunctionParameters{
+					Properties: func() *api.ToolPropertiesMap {
+						props := api.NewToolPropertiesMap()
+						props.Set("location", api.ToolProperty{Type: api.PropertyType{"string"}})
+						return props
+					}(),
+				},
+			},
+		},
+	}
+
+	cases := []struct {
+		desc string
+		raw  string
+	}{
+		{
+			desc: "function closed by parameter closer",
+			raw:  "<function=get_weather><parameter=location>SF" + testParamClose,
+		},
+		{
+			desc: "extra parameter closer at end",
+			raw:  "<function=get_weather><parameter=location>SF" + testParamClose + testFuncClose + testParamClose,
+		},
+		{
+			desc: "parameter closed by function closer",
+			raw:  "<function=get_weather><parameter=location>SF" + testFuncClose,
+		},
+		{
+			desc: "unclosed function at end of stream",
+			raw:  "<function=get_weather><parameter=location>SF",
+		},
+		{
+			desc: "nested function tag inside parameter value",
+			raw:  `<function=get_weather><parameter=location><function=inner>SF` + testParamClose + testFuncClose,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			parser := ParserForName("qwen3.5")
+			if parser == nil {
+				t.Fatal("expected qwen3.5 parser")
+			}
+			parser.Init(tools, nil, &api.ThinkValue{Value: false})
+
+			content, _, calls, err := parser.Add("<tool_call>"+tc.raw+"</tool_call>", true)
+			if err != nil {
+				t.Fatalf("expected soft fail (err == nil), got %v", err)
+			}
+			if len(calls) == 0 && !strings.Contains(content, "<function") {
+				t.Fatalf("expected either a parsed tool call or raw text in content, got calls=%#v content=%q", calls, content)
+			}
+			for _, call := range calls {
+				if call.Function.Name == "" {
+					t.Fatalf("parsed tool call with empty function name: %#v", call)
+				}
+			}
+		})
 	}
 }

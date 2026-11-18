@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ollama/ollama/api"
@@ -1186,25 +1187,75 @@ func TestQwen3CoderParserToolCallIndexResetOnInit(t *testing.T) {
 	}
 }
 
-func TestQwen3CoderParserRejectsMalformedParameters(t *testing.T) {
-	for _, raw := range []string{
-		`<function=write><parameter=content>print('ok')</function>`,
-		`<function=write><parameter=content>print('ok')</parameter=content></function>`,
-		`<function=write><parameter=content>text = "</function>"</parameter>`,
-		// Reduced shape from #18563's follow-up: the outer edits parameter is unclosed.
-		`<function=edit>
-<parameter=path>src/orders.py</parameter>
-<parameter=edits>
-<parameter=oldText>before</parameter>
-<parameter=newText>after</parameter>
-</function>`,
-	} {
-		parser := Qwen3CoderParser{}
-		parser.Init(nil, nil, nil)
-		_, _, calls, err := parser.Add(toolOpenTag+raw+toolCloseTag, true)
-		if err == nil || len(calls) != 0 {
-			t.Errorf("raw=%q: expected rejection without tool calls, got calls=%#v, err=%v", raw, calls, err)
-		}
+// Closing tags are assembled by concatenation on purpose: the raw literals must
+// never appear verbatim in this file (see the parsers' escaping tests).
+const (
+	testParamClose = "</" + "parameter>"
+	testFuncClose  = "</" + "function>"
+)
+
+// TestQwen3CoderParserSoftFailsMalformedParameters checks that malformed
+// function/parameter XML never surfaces an error to the caller: either the call
+// is recovered (via repair/fallback extraction) or the raw text is emitted as
+// content. Hard-failing here used to kill the agent mid-turn.
+func TestQwen3CoderParserSoftFailsMalformedParameters(t *testing.T) {
+	cases := []struct {
+		desc string
+		raw  string
+	}{
+		{
+			desc: "function closed by parameter closer",
+			raw:  "<function=write><parameter=content>print('ok')" + testParamClose,
+		},
+		{
+			desc: "extra parameter closer at end",
+			raw:  "<function=write><parameter=content>ok" + testParamClose + testFuncClose + testParamClose,
+		},
+		{
+			desc: "parameter closed by function closer",
+			raw:  "<function=write><parameter=content>print('ok')" + testFuncClose,
+		},
+		{
+			desc: "unclosed function at end of stream",
+			raw:  "<function=write><parameter=content>print('ok')" + testParamClose,
+		},
+		{
+			desc: "nested function tag inside parameter value",
+			raw:  `<function=write><parameter=content>text = "<function=inner>"` + testParamClose + testFuncClose,
+		},
+		{
+			desc: "parameter closer used as parameter name closer",
+			raw:  "<function=write><parameter=content>print('ok')" + "</parameter=content>" + testFuncClose,
+		},
+		{
+			desc: "outer parameter unclosed (issue #18563 follow-up)",
+			raw: "<function=edit>\n<parameter=path>src/orders.py" + testParamClose +
+				"\n<parameter=edits>\n<parameter=oldText>before" + testParamClose +
+				"\n<parameter=newText>after" + testParamClose + "\n" + testFuncClose,
+		},
+		{
+			desc: "no recoverable function name at all",
+			raw:  "garbage" + testParamClose + "more garbage",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			parser := Qwen3CoderParser{}
+			parser.Init(nil, nil, nil)
+			content, _, calls, err := parser.Add(toolOpenTag+tc.raw+toolCloseTag, true)
+			if err != nil {
+				t.Fatalf("expected soft fail (err == nil), got %v", err)
+			}
+			if len(calls) == 0 && !strings.Contains(content, "<function") && !strings.Contains(content, tc.raw) {
+				t.Fatalf("expected either a parsed tool call or the raw text in content, got calls=%#v content=%q", calls, content)
+			}
+			for _, call := range calls {
+				if call.Function.Name == "" {
+					t.Fatalf("parsed tool call with empty function name: %#v", call)
+				}
+			}
+		})
 	}
 }
 

@@ -270,6 +270,14 @@ func parseToolCall(raw qwenEventRawToolCall, tools []api.Tool) (api.ToolCall, er
 		}
 	}
 
+	functionCall.Name = strings.TrimSpace(functionCall.Name)
+	if functionCall.Name == "" {
+		// Nothing usable was recovered from the malformed XML. Return an error so
+		// Add() takes its soft-fail branch: the raw text is then emitted as
+		// content and the agent keeps running.
+		return api.ToolCall{}, fmt.Errorf("failed to parse tool call: empty function name (err: %w)", err)
+	}
+
 	toolCall.Function = api.ToolCallFunction{
 		Name: functionCall.Name,
 	}

@@ -112,8 +112,14 @@ func (p *Qwen35Parser) Add(s string, done bool) (content string, thinking string
 		case qwen35EventContent:
 			parsedContent, _, parsedCalls, err := p.toolParser.Add(event.content, done)
 			if err != nil {
-				slog.Warn("qwen3.5 tool call parsing failed", "error", err)
-				return "", "", nil, err
+				// Soft fail: the model emitted a malformed tool call. Emit the raw
+				// text as content so the agent survives and the user can see what
+				// the model actually produced, instead of killing the turn.
+				slog.Warn("qwen3.5 tool call parsing failed; emitting raw text as content (soft fail)",
+					"error", err,
+					"raw", truncateForLog(event.content, repairLogLimit))
+				contentSb.WriteString(qwen35ToolCallOpenTag + event.content + toolCloseTag)
+				continue
 			}
 			contentSb.WriteString(parsedContent)
 			calls = append(calls, parsedCalls...)

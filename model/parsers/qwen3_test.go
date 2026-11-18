@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ollama/ollama/api"
@@ -314,5 +315,59 @@ func TestQwen3ParserToolCallIndexResetOnInit(t *testing.T) {
 	}
 	if !toolCallEqual(calls[0], want) {
 		t.Fatalf("got %#v, want %#v", calls[0], want)
+	}
+}
+
+// TestQwen3ParserSoftFailsMalformedToolCallXML checks that malformed tool-call
+// payloads never surface an error to the caller for the qwen3 JSON variant:
+// either the call is recovered (via repairJSON) or the raw text is emitted as
+// content so the agent keeps running.
+func TestQwen3ParserSoftFailsMalformedToolCallXML(t *testing.T) {
+	paramClose := "</" + "parameter>"
+	funcClose := "</" + "function>"
+
+	cases := []struct {
+		desc string
+		raw  string
+	}{
+		{
+			desc: "function closed by parameter closer",
+			raw:  "<function=write><parameter=content>print('ok')" + paramClose,
+		},
+		{
+			desc: "extra parameter closer at end",
+			raw:  "<function=write><parameter=content>ok" + paramClose + funcClose + paramClose,
+		},
+		{
+			desc: "parameter closed by function closer",
+			raw:  "<function=write><parameter=content>print('ok')" + funcClose,
+		},
+		{
+			desc: "unclosed function at end of stream",
+			raw:  "<function=write><parameter=content>print('ok')" + paramClose,
+		},
+		{
+			desc: "nested function tag inside parameter value",
+			raw:  `<function=write><parameter=content>text = "<function=inner>"` + paramClose + funcClose,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			parser := &Qwen3Parser{hasThinkingSupport: false}
+			parser.Init(nil, nil, &api.ThinkValue{Value: false})
+			content, _, calls, err := parser.Add("<tool_call>"+tc.raw+"</tool_call>", true)
+			if err != nil {
+				t.Fatalf("expected soft fail (err == nil), got %v", err)
+			}
+			if len(calls) == 0 && !strings.Contains(content, "<tool_call>") {
+				t.Fatalf("expected either a parsed tool call or the raw text in content, got calls=%#v content=%q", calls, content)
+			}
+			for _, call := range calls {
+				if call.Function.Name == "" {
+					t.Fatalf("parsed tool call with empty function name: %#v", call)
+				}
+			}
+		})
 	}
 }

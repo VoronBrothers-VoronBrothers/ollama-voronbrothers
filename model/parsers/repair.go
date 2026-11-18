@@ -1,9 +1,26 @@
 package parsers
 
 import (
+	"log/slog"
 	"regexp"
 	"strings"
 )
+
+// repairLogLimit caps how much of a (possibly huge) malformed tool call we put
+// into a diagnostic log line.
+const repairLogLimit = 300
+
+// truncateForLog returns at most n runes of s, for diagnostic logging only.
+func truncateForLog(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "...(truncated)"
+}
 
 // This file holds shared "second chance" repairs for malformed tool-call text.
 // Models occasionally emit bracket/structure typos ("wrong bracket", unclosed
@@ -134,7 +151,17 @@ func repairQwenXML(s string) string {
 		out.WriteString("</" + stack[len(stack)-1] + ">")
 		stack = stack[:len(stack)-1]
 	}
-	return out.String()
+	repaired := out.String()
+
+	// Diagnostics: keep the first 300 chars of both the original and repaired
+	// text so real-world malformed calls from users can be triaged from logs.
+	if repaired != s {
+		slog.Debug("repairQwenXML adjusted malformed qwen tool call XML",
+			"original", truncateForLog(s, repairLogLimit),
+			"repaired", truncateForLog(repaired, repairLogLimit))
+	}
+
+	return repaired
 }
 
 func containsName(names []string, n string) bool {
