@@ -921,6 +921,56 @@ func TestChatMouseWheelScrollsTranscriptWhileRunning(t *testing.T) {
 	}
 }
 
+func TestChatPinnedTranscriptStaysPutWhileStreaming(t *testing.T) {
+	m := chatModel{width: 80, height: 10}
+	for range 40 {
+		m.entries = append(m.entries, chatEntry{role: "user", content: strings.Repeat("line ", 8)})
+	}
+	if m.maxScroll() == 0 {
+		t.Fatal("test setup should produce scrollable transcript")
+	}
+
+	// Scroll up a few lines: the reader must now be anchored to an absolute line.
+	m.scrollBy(3)
+	if !m.transcriptPinned {
+		t.Fatal("scrolling up should pin an absolute start line")
+	}
+	wantStart := m.maxScroll() - m.scroll
+
+	// Simulate streaming: a new entry grows the transcript. The pinned reader
+	// must keep seeing exactly the same lines instead of being dragged down.
+	idx := len(m.entries)
+	m.entries = append(m.entries, chatEntry{role: "assistant", content: strings.Repeat("fresh output ", 8)})
+	m.markEntryDirty(idx)
+
+	if m.pinnedStart != wantStart {
+		t.Fatalf("pinnedStart changed to %d while streaming; want stable %d", m.pinnedStart, wantStart)
+	}
+	if gotStart := m.maxScroll() - m.scroll; gotStart != wantStart {
+		t.Fatalf("visible start line slid to %d while pinned; want stable %d", gotStart, wantStart)
+	}
+
+	// Scrolling back to the bottom releases the pin and resumes live-follow.
+	m.scrollBy(-(wantStart + 10)) // overshoot clamps to the very bottom
+	if m.transcriptPinned {
+		t.Fatalf("pin still active after returning to bottom")
+	}
+	idx = len(m.entries)
+	m.entries = append(m.entries, chatEntry{role: "assistant", content: strings.Repeat("more output ", 8)})
+	m.markEntryDirty(idx)
+	if m.scroll != 0 {
+		t.Fatalf("scroll = %d after unpin growth; want 0 (follow bottom)", m.scroll)
+	}
+
+	// Transcript shrunk below the pinned line: the pin must clamp, not panic.
+	m.transcriptPinned = true
+	m.pinnedStart = m.maxScroll() + 50
+	m.markEntryDirty(0)
+	if m.pinnedStart >= 0 && m.pinnedStart > m.maxScroll() {
+		t.Fatalf("pinnedStart = %d after shrink; want clamped to <= maxScroll (%d)", m.pinnedStart, m.maxScroll())
+	}
+}
+
 func TestChatWindowsMouseWheelScrollsTranscript(t *testing.T) {
 	oldGOOS := chatRuntimeGOOS
 	chatRuntimeGOOS = "windows"

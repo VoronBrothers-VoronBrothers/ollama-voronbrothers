@@ -123,6 +123,8 @@ type chatModel struct {
 	compactEvents       <-chan tea.Msg
 	detectedToolCalls   []chatEntry
 	scroll              int
+	transcriptPinned    bool // reading anchor active; pinnedStart is the absolute line
+	pinnedStart         int  // absolute transcript line pinned while reading
 	toolOutputMode      bool
 	toolOutputOpen      bool
 	thinkingDetailsOpen bool
@@ -177,7 +179,7 @@ type chatModel struct {
 	heartbeatMsg       string
 	heartbeatInterval  time.Duration
 	heartbeatCount     int // HBCOUNT-DEFAULT: лимит сообщений (0=безлимит)
-	err               error
+	err                error
 }
 
 type chatSelectionPoint struct {
@@ -243,7 +245,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		approvalState:      approvalState,
 		defaultAllowAll:    opts.AllowAllTools,
 		autoSendDuration:   600 * time.Second, // AUTOSEND-DEFAULT: 10 min, изменить здесь (поиск: AUTOSEND-DEFAULT)
-		heartbeatCount:    100,              // HBCOUNT-DEFAULT: лимит heartbeat-сообщений, изменить здесь
+		heartbeatCount:     100,               // HBCOUNT-DEFAULT: лимит heartbeat-сообщений, изменить здесь
 		promptHistory:      initialPromptHistory(ctx, opts),
 		status:             "ready",
 		openModelOnInit:    opts.OpenModelPicker || (strings.TrimSpace(opts.Model) == "" && opts.ModelOptions != nil),
@@ -316,6 +318,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resized := wasSet && (m.width != msg.Width || m.height != msg.Height)
 		m.width = msg.Width
 		m.height = msg.Height
+		// Resize changes maxScroll: re-derive the pinned scroll position so a
+		// reading anchor stays on the same absolute line.
+		m.syncPinnedScroll()
 		if resized {
 			return m.withFlowTranscriptRepaint(nil)
 		}
@@ -701,6 +706,12 @@ func (m *chatModel) dragTranscriptSelection(msg tea.MouseMsg) {
 		top, height := m.transcriptLayout()
 		if msg.Y <= top {
 			m.scrollBy(1)
+			// Re-anchor to the current start line so edge-scrolling keeps
+			// working while a pin is active (syncPinnedScroll would otherwise
+			// restore the old scroll position on the next entry change).
+			if m.transcriptPinned {
+				m.pinnedStart = m.maxScroll() - clamp(m.scroll, 0, m.maxScroll())
+			}
 		} else if msg.Y >= top+height-1 {
 			m.scrollBy(-1)
 		}
@@ -820,8 +831,14 @@ func (m chatModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveInputCursorToLineEnd()
 	case tea.KeyCtrlHome:
 		m.scroll = m.maxScroll()
+		if m.scroll > 0 {
+			// Anchor at the very top of the transcript.
+			m.transcriptPinned = true
+			m.pinnedStart = 0
+		}
 	case tea.KeyCtrlEnd:
 		m.scroll = 0
+		m.transcriptPinned = false
 	case tea.KeyBackspace, tea.KeyCtrlH:
 		m.resetPromptHistoryCursor()
 		if msg.Alt {
@@ -865,6 +882,7 @@ func (m *chatModel) toggleInlineTranscriptDetails() {
 	m.applyThinkingDetails()
 	m.selection = chatSelection{}
 	m.scroll = 0
+	m.transcriptPinned = false
 }
 
 func (m chatModel) updateCtrlC() (tea.Model, tea.Cmd) {
@@ -1190,6 +1208,7 @@ func (m *chatModel) resetChat(status string) (tea.Model, tea.Cmd) {
 	m.contextTokens = 0
 	m.contextEstimate = true
 	m.scroll = 0
+	m.transcriptPinned = false
 	m.flowPrintedLines = 0
 	m.status = status
 	return *m, tea.ClearScreen
@@ -1330,6 +1349,7 @@ func (m *chatModel) startRunWithMessages(displayInput, historyInput string, newM
 	m.status = "running"
 	m.spinner = 0
 	m.scroll = 0
+	m.transcriptPinned = false
 	m.detectedToolCalls = nil
 	m.thinking = false
 	m.thinkingTokens = 0

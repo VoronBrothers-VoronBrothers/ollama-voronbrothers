@@ -389,6 +389,35 @@ func (m *chatModel) scrollBy(lines int) {
 		return
 	}
 	m.scroll = clamp(m.scroll+lines, 0, m.maxScroll())
+	if m.scroll == 0 {
+		// Back at the live edge: stop anchoring so streaming follows again.
+		m.transcriptPinned = false
+	} else if lines > 0 && !m.transcriptPinned {
+		// User scrolled up: anchor to the current absolute start line so that
+		// streamed deltas no longer drag the visible window downward.
+		m.transcriptPinned = true
+		m.pinnedStart = m.maxScroll() - m.scroll
+	}
+}
+
+// syncPinnedScroll re-derives m.scroll from the pinned absolute line. While
+// generation is running every new transcript line grows maxScroll, which would
+// shift a "distance from bottom" scroll position and push the lines the user is
+// reading out of view; anchoring to an absolute line keeps them in place.
+func (m *chatModel) syncPinnedScroll() {
+	if !m.transcriptPinned {
+		return
+	}
+	maxS := m.maxScroll()
+	start := clamp(m.pinnedStart, 0, maxS)
+	m.scroll = maxS - start
+	if maxS == 0 {
+		// Transcript is empty: nothing to anchor.
+		m.transcriptPinned = false
+	} else if start < m.pinnedStart {
+		// Transcript shrank below the pinned line (compaction, clear): clamp.
+		m.pinnedStart = start
+	}
 }
 
 func stripChatANSI(s string) string {
@@ -2122,6 +2151,9 @@ func (m *chatModel) markEntryDirty(index int) {
 	}
 	entry.renderKey = chatEntryRenderKey{}
 	entry.renderLines = nil
+	// Entry content changed: if the user is reading a pinned line while a run
+	// streams more text, keep the anchor stable (scroll follows the pin).
+	m.syncPinnedScroll()
 }
 
 func entryRenderKey(entry chatEntry, width int) chatEntryRenderKey {
