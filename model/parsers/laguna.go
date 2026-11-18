@@ -3,6 +3,7 @@ package parsers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"unicode"
@@ -126,17 +127,36 @@ func (p *LagunaParser) Add(s string, done bool) (content string, thinking string
 			}
 		case lagunaParserStateContent:
 			var parsedCalls []api.ToolCall
+			savedBuf := p.buffer.String()
 			progress, content, parsedCalls, err = p.consumeContent(done)
 			if err != nil {
-				return "", "", nil, err
+				// Soft fail: the model emitted a malformed tool call. Emit the raw
+				// text as content so the agent survives and the user can see what
+				// the model actually produced, instead of killing the turn.
+				slog.Warn("laguna tool call parsing failed; emitting raw text as content (soft fail)",
+					"error", err,
+					"raw", truncateForLog(savedBuf, repairLogLimit))
+				contentSB.WriteString(savedBuf)
+				p.buffer.Reset()
+				break
 			}
 			contentSB.WriteString(content)
 			calls = append(calls, parsedCalls...)
 		case lagunaParserStateTool:
 			var call api.ToolCall
+			savedBuf := p.buffer.String()
 			progress, call, err = p.consumeTool(done)
 			if err != nil {
-				return "", "", nil, err
+				// Soft fail: the model emitted a malformed tool call. Emit the raw
+				// text as content so the agent survives and the user can see what
+				// the model actually produced, instead of killing the turn.
+				slog.Warn("laguna tool call parsing failed; emitting raw text as content (soft fail)",
+					"error", err,
+					"raw", truncateForLog(savedBuf, repairLogLimit))
+				contentSB.WriteString(lagunaToolCallOpenTag + savedBuf + lagunaToolCallCloseTag)
+				p.buffer.Reset()
+				p.state = lagunaParserStateContent
+				break
 			}
 			if progress {
 				calls = append(calls, call)
