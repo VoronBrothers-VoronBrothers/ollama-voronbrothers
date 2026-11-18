@@ -14,11 +14,13 @@ import (
 	"github.com/ollama/ollama/llm"
 )
 
-// malformedToolCall closes <parameter> with </function>, which the qwen3.5
-// parser rejects.
-const malformedToolCall = "<think>\nthinking\n</think>\n\n<tool_call>\n<function=write_file>\n<parameter=path>\nprobe.txt\n</function>\n</tool_call>"
+// malformedToolCall closes the function element with the parameter closer
+// (a real-world qwen3.5/Qwen3-Coder mistake). The parser must repair it or
+// soft-fail: it must never return an error that kills the stream.
+var malformedToolCall = "<think>\nthinking\n</think>\n\n<tool_call>\n<function=write_file>\n<parameter=path>\nprobe.txt\n" +
+	"</" + "function>\n</tool_call>"
 
-func TestChatParseErrorMidStreamDoesNotWedge(t *testing.T) {
+func TestChatMalformedToolCallSoftFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	secondChunkReturned := make(chan struct{})
@@ -46,25 +48,27 @@ func TestChatParseErrorMidStreamDoesNotWedge(t *testing.T) {
 			Messages: []api.Message{{Role: "user", Content: "hello"}},
 			Stream:   &stream,
 		})
-		if w.Code != http.StatusInternalServerError {
-			t.Errorf("expected 500 from parse failure, got %d: %s", w.Code, w.Body.String())
+		// Soft-fail: the turn must complete normally, with the raw text
+		// surfaced as content instead of a 500.
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200 (soft-fail) from malformed tool call, got %d: %s", w.Code, w.Body.String())
 		}
 	}()
 
 	select {
 	case <-secondChunkReturned:
 	case <-time.After(5 * time.Second):
-		t.Fatal("completion callback blocked after a parse error")
+		t.Fatal("completion callback blocked after a malformed tool call")
 	}
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("chat handler did not return after a parse error")
+		t.Fatal("chat handler did not return after a malformed tool call")
 	}
 }
 
-func TestGenerateParseErrorMidStreamDoesNotWedge(t *testing.T) {
+func TestGenerateMalformedToolCallSoftFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	secondChunkReturned := make(chan struct{})
@@ -91,21 +95,23 @@ func TestGenerateParseErrorMidStreamDoesNotWedge(t *testing.T) {
 			Prompt: "hello",
 			Stream: &stream,
 		})
-		if w.Code != http.StatusInternalServerError {
-			t.Errorf("expected 500 from parse failure, got %d: %s", w.Code, w.Body.String())
+		// Soft-fail: the turn must complete normally, with the raw text
+		// surfaced as content instead of a 500.
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200 (soft-fail) from malformed tool call, got %d: %s", w.Code, w.Body.String())
 		}
 	}()
 
 	select {
 	case <-secondChunkReturned:
 	case <-time.After(5 * time.Second):
-		t.Fatal("completion callback blocked after a parse error")
+		t.Fatal("completion callback blocked after a malformed tool call")
 	}
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("generate handler did not return after a parse error")
+		t.Fatal("generate handler did not return after a malformed tool call")
 	}
 }
 
