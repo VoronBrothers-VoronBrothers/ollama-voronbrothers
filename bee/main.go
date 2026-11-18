@@ -412,6 +412,11 @@ func systemPrompt() string {
 		"Work step by step; prefer small verifiable actions."
 }
 
+// reasoningTools400 — известный казус прокси (gpt-6-luna): /v1/chat/completions с
+// function tools отклоняется, если reasoning включён по умолчанию. Лечится явным
+// "reasoning_effort":"none" в теле запроса.
+const reasoningTools400Marker = "Function tools with reasoning_effort"
+
 func chatOnce(client *http.Client, ep endpoint, messages []chatMsg) (respChatResponse, error) {
 	reqBody := map[string]any{
 		"model":    flagModel,
@@ -419,30 +424,40 @@ func chatOnce(client *http.Client, ep endpoint, messages []chatMsg) (respChatRes
 		"tools":    beeTools(),
 		"stream":   false,
 	}
-	payload, _ := json.Marshal(reqBody)
 
-	req, err := http.NewRequest("POST", ep.baseURL+"/chat/completions", strings.NewReader(string(payload)))
-	if err != nil {
-		return respChatResponse{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if ep.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+ep.apiKey)
-	}
+	// до 2 попыток: первая обычная, вторая — с reasoning_effort=none (казус выше)
+	for attempt := 0; ; attempt++ {
+		payload, _ := json.Marshal(reqBody)
 
-	r, err := client.Do(req)
-	if err != nil {
-		return respChatResponse{}, err
+		req, err := http.NewRequest("POST", ep.baseURL+"/chat/completions", strings.NewReader(string(payload)))
+		if err != nil {
+			return respChatResponse{}, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if ep.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+ep.apiKey)
+		}
+
+		r, err := client.Do(req)
+		if err != nil {
+			return respChatResponse{}, err
+		}
+		var raw map[string]any
+		decErr := json.NewDecoder(r.Body).Decode(&raw)
+		status := r.StatusCode
+		r.Body.Close()
+		if decErr != nil {
+			return respChatResponse{}, fmt.Errorf("decode response (http %d): %w", status, err)
+		}
+		if status == http.StatusBadRequest && attempt == 0 && strings.Contains(shortJSON(raw), reasoningTools400Marker) {
+			reqBody["reasoning_effort"] = "none"
+			continue
+		}
+		if status >= 400 {
+			return respChatResponse{}, fmt.Errorf("http %d: %.300s", status, shortJSON(raw))
+		}
+		return parseResp(raw), nil
 	}
-	defer r.Body.Close()
-	var raw map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		return respChatResponse{}, fmt.Errorf("decode response (http %d): %w", r.StatusCode, err)
-	}
-	if r.StatusCode >= 400 {
-		return respChatResponse{}, fmt.Errorf("http %d: %.300s", r.StatusCode, shortJSON(raw))
-	}
-	return parseResp(raw), nil
 }
 
 type respChatResponse struct {

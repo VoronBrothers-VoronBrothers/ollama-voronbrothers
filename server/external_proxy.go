@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -151,22 +152,26 @@ func handleExternalChat(c *gin.Context, extRef *externalModelRef, body []byte) {
 		return
 	}
 
-	// Send to external API
+	// Send to external API (до 2 попыток: known-казус reasoning_effort, см. ниже)
 	url := extRef.Provider.BaseURL + "/chat/completions"
-	outReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(reqBody))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("external provider: %s", err.Error())})
-		return
-	}
-	outReq.Header.Set("Content-Type", "application/json")
-	outReq.Header.Set("Authorization", "Bearer "+extRef.Provider.APIKey)
-
-	resp, err := http.DefaultClient.Do(outReq)
+	resp, err := postExternalChat(c.Request.Context(), url, extRef.Provider.APIKey, reqBody)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("external provider unreachable: %s", err.Error())})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { closeResponseBody(resp) }()
+
+	// [voron] known казус прокси (gpt-6-luna): /v1/chat/completions с function tools
+	// отклоняется, когда reasoning включён по умолчанию. Лечится явным
+	// "reasoning_effort":"none" — один раз ретраим.
+	if resp.StatusCode == http.StatusBadRequest && containsReasoningTools400(resp) {
+		resp.Body.Close()
+		slog.Debug("external proxy: retrying with reasoning_effort=none", "model", extRef.ModelID)
+		retryBody := withReasoningEffortNone(reqBody)
+		if r2, e2 := postExternalChat(c.Request.Context(), url, extRef.Provider.APIKey, retryBody); e2 == nil {
+			resp = r2
+		}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -434,6 +439,53 @@ func mapFinishReason(reason string) string {
 	default:
 		return "stop"
 	}
+}
+
+// reasoningTools400Marker — known казус прокси (gpt-6-luna): /v1/chat/completions
+// с function tools отклоняется, когда reasoning включён по умолчанию.
+const reasoningTools400Marker = "Function tools with reasoning_effort"
+
+func postExternalChat(ctx context.Context, url string, apiKey string, body []byte) (*http.Response, error) {
+	outReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	outReq.Header.Set("Content-Type", "application/json")
+	outReq.Header.Set("Authorization", "Bearer "+apiKey)
+	return http.DefaultClient.Do(outReq)
+}
+
+func closeResponseBody(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+}
+
+// containsReasoningTools400 читает тело 400-ответа и распознаёт known-казус.
+// Если маркер не найден, прочитанные байты возвращаются в resp.Body,
+// чтобы пасsthrough не потерял ответ upstream'а.
+func containsReasoningTools400(resp *http.Response) bool {
+	buf := make([]byte, 4096)
+	n, _ := io.ReadFull(resp.Body, buf)
+	if strings.Contains(string(buf[:n]), reasoningTools400Marker) {
+		return true
+	}
+	resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf[:n]), resp.Body))
+	return false
+}
+
+// withReasoningEffortNone подставляет "reasoning_effort":"none" в OpenAI-тело запроса.
+func withReasoningEffortNone(body []byte) []byte {
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		return nil
+	}
+	m["reasoning_effort"] = "none"
+	out, err := marshalNoHTMLEscape(m)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // buildToolCallsOut converts accumulated OpenAI tool-call fragments into the

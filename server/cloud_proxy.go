@@ -228,7 +228,32 @@ func proxyCloudRequestWithPath(c *gin.Context, body []byte, path string, disable
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { closeResponseBody(resp) }()
+
+	// [voron] known казус прокси (gpt-6-luna): /v1/chat/completions с function tools
+	// отклоняется, когда reasoning включён по умолчанию. Ретраим один раз с явным
+	// "reasoning_effort":"none".
+	if resp.StatusCode == http.StatusBadRequest && containsReasoningTools400(resp) {
+		resp.Body.Close()
+		slog.Debug("cloud proxy: retrying with reasoning_effort=none")
+		retryBody := withReasoningEffortNone(body)
+		if retryBody != nil {
+			outReq2, err2 := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, targetURL.String(), bytes.NewReader(retryBody))
+			if err2 == nil {
+				copyProxyRequestHeaders(outReq2.Header, c.Request.Header)
+				if clientVersion := strings.TrimSpace(version.Version); clientVersion != "" {
+					outReq2.Header.Set(cloudProxyClientVersionHeader, clientVersion)
+				}
+				if err := cloudProxySignRequest(outReq2.Context(), outReq2); err == nil {
+					if resp2, e2 := http.DefaultClient.Do(outReq2); e2 == nil {
+						resp = resp2
+					} else {
+						slog.Debug("cloud proxy: reasoning_effort retry failed", "error", err)
+					}
+				}
+			}
+		}
+	}
 
 	if transformChat {
 		// The compatibility writer owns the downstream representation headers.
