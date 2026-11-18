@@ -122,8 +122,15 @@ func (p *GLM46Parser) Add(s string, done bool) (content string, thinking string,
 		case glm46EventRawToolCall:
 			toolCall, err := parseGLM46ToolCall(event, p.tools)
 			if err != nil {
-				slog.Warn("glm-4.6 tool call parsing failed", "error", err)
-				return "", "", nil, err
+				// Soft fail: models occasionally emit malformed tool-call XML
+				// (mismatched closing tags, unpaired arg_key/arg_value, unknown
+				// function). Returning the error here would abort the stream in
+				// the server, so emit the raw tool-call text as content instead
+				// and let the caller/model recover.
+				slog.Warn("glm-4.6 tool call parsing failed; emitting raw text as content (soft fail)",
+					"error", err, "raw", truncateForLog(event.raw, repairLogLimit))
+				contentSb.WriteString(glm46ToolOpenTag + event.raw + glm46ToolCloseTag)
+				continue
 			}
 			toolCall.Function.Index = p.callIndex
 			p.callIndex++

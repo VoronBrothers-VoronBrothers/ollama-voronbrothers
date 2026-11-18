@@ -563,9 +563,18 @@ func TestDeepSeek3Parser_parseToolCallContent(t *testing.T) {
 			},
 		},
 		{
-			name:        "invalid_format_no_separator",
-			content:     "get_weather{\"location\":\"Paris\"}",
-			expectError: true,
+			// Separator missing but a JSON object is present: recovered by the
+			// loose JSON fallback instead of failing the whole stream.
+			name:    "no_separator_with_json_recovered",
+			content: "get_weather{\"location\":\"Paris\"}",
+			expected: api.ToolCall{
+				Function: api.ToolCallFunction{
+					Name: "get_weather",
+					Arguments: testArgs(map[string]any{
+						"location": "Paris",
+					}),
+				},
+			},
 		},
 		{
 			name:        "invalid_json",
@@ -621,6 +630,7 @@ func TestDeepSeekParser_EdgeCases(t *testing.T) {
 		input            string
 		expectedContent  string
 		expectedThinking string
+		expectedCalls    []api.ToolCall
 		hasThinking      bool
 	}{
 		{
@@ -651,11 +661,28 @@ func TestDeepSeekParser_EdgeCases(t *testing.T) {
 			hasThinking:     false,
 		},
 		{
+			// No separator token, but a JSON object is present: recover the call
+			// instead of failing the whole stream.
+			name:            "malformed_tool_call_missing_sep_json_fallback",
+			input:           "Testing.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>bad_tool{\"arg\":\"value\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+			expectedContent: "Testing.",
+			expectedCalls: []api.ToolCall{
+				{
+					Function: api.ToolCallFunction{
+						Index:     0,
+						Name:      "bad_tool",
+						Arguments: testArgs(map[string]any{"arg": "value"}),
+					},
+				},
+			},
+			hasThinking: false,
+		},
+		{
 			// Soft fail: the broken tool call block is consumed and its raw text
 			// is emitted as content so the agent survives.
-			name:            "malformed_tool_call_missing_sep_soft_fail",
-			input:           "Testing.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>bad_tool{\"arg\":\"value\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-			expectedContent: "Testing.<｜tool▁call▁begin｜>bad_tool{\"arg\":\"value\"}<｜tool▁call▁end｜>",
+			name:            "malformed_tool_call_garbage_soft_fail",
+			input:           "Testing.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>bad_tool<｜tool▁sep｜>not json at all<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+			expectedContent: "Testing.<｜tool▁call▁begin｜>bad_tool<｜tool▁sep｜>not json at all<｜tool▁call▁end｜>",
 			hasThinking:     false,
 		},
 		{
@@ -699,7 +726,11 @@ func TestDeepSeekParser_EdgeCases(t *testing.T) {
 			name:            "consecutive_tool_calls",
 			input:           "First.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>tool1<｜tool▁sep｜>{}<｜tool▁call▁end｜><｜tool▁calls▁end｜>Second.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>tool2<｜tool▁sep｜>{}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
 			expectedContent: "First.",
-			hasThinking:     false,
+			expectedCalls: []api.ToolCall{
+				{Function: api.ToolCallFunction{Index: 0, Name: "tool1", Arguments: testArgs(map[string]any{})}},
+				{Function: api.ToolCallFunction{Index: 1, Name: "tool2", Arguments: testArgs(map[string]any{})}},
+			},
+			hasThinking: false,
 		},
 	}
 
@@ -708,7 +739,7 @@ func TestDeepSeekParser_EdgeCases(t *testing.T) {
 			parser := &DeepSeek3Parser{hasThinkingSupport: tt.hasThinking}
 			parser.Init([]api.Tool{}, nil, &api.ThinkValue{Value: tt.hasThinking})
 
-			content, thinking, _, err := parser.Add(tt.input, true)
+			content, thinking, calls, err := parser.Add(tt.input, true)
 			if err != nil {
 				t.Fatalf("Add() error = %v", err)
 			}
@@ -719,6 +750,10 @@ func TestDeepSeekParser_EdgeCases(t *testing.T) {
 
 			if diff := cmp.Diff(tt.expectedThinking, thinking); diff != "" {
 				t.Errorf("Thinking mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tt.expectedCalls, calls, argsComparer); diff != "" {
+				t.Errorf("Tool calls mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

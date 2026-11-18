@@ -1130,3 +1130,92 @@ func TestRepairGLM46XML(t *testing.T) {
 		})
 	}
 }
+
+// TestGLM46ParserMalformedToolCallSoftFail verifies that structurally broken
+// tool-call XML no longer returns an error from Add(): the raw block is emitted
+// as content so the agent stream survives.
+func TestGLM46ParserMalformedToolCallSoftFail(t *testing.T) {
+	tc := "<" + "/tool_call>"
+	cases := []struct {
+		name         string
+		wantSoftFail bool
+		parts        []string // concatenated to build the input, so closers stay split
+	}{
+		{
+			name:         "unpaired arg_value",
+			wantSoftFail: true,
+			parts: []string{
+				"<tool_call>write\n<arg_key>path</arg_key>\n<arg_value>a</arg_value><arg_value>b</arg_value>",
+				tc,
+			},
+		},
+		{
+			name:         "unpaired arg_key",
+			wantSoftFail: true,
+			parts: []string{
+				"<tool_call>write\n<arg_key>path</arg_key><arg_key>extra</arg_key><arg_value>a</arg_value>",
+				tc,
+			},
+		},
+		{
+			name:         "missing function name",
+			wantSoftFail: true,
+			parts: []string{
+				"<tool_call><arg_key>k</arg_key><arg_value>v</arg_value>",
+				tc,
+			},
+		},
+		{
+			// Mirrors the field reports: the model closes an argument with a
+			// qwen-style parameter tag instead of the GLM one. Must not error.
+			name: "qwen style parameter closer inside value",
+			parts: []string{
+				"<tool_call>write\n<arg_key>path</arg_key>\n<arg_value>out.txt",
+				"</" + "parameter>",
+				"</arg_value>",
+				tc,
+			},
+		},
+		{
+			name: "stray parameter-style closer",
+			parts: []string{
+				"<tool_call>write\n<arg_key>path</arg_key>\n<arg_value>a",
+				"<" + "/arg_key>",
+				"<arg_value>b</arg_value>",
+				tc,
+			},
+		},
+	}
+
+	tools := glm46FinalizationTestTools()
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			input := strings.Join(c.parts, "")
+
+			parser := GLM46Parser{}
+			parser.Init(tools, nil, nil)
+
+			content, _, calls, err := parser.Add(input, true)
+			if err != nil {
+				t.Fatalf("Add() error = %v, want soft fail (nil)", err)
+			}
+			if c.wantSoftFail {
+				if len(calls) != 0 {
+					t.Fatalf("got %d tool calls, want 0 (raw text should be content)", len(calls))
+				}
+			}
+			if !c.wantSoftFail {
+				// repairGLM46XML managed to rebuild this one: a call is fine,
+				// the point is that no error escapes to the server.
+				return
+			}
+			if !strings.Contains(content, "<tool_call>") {
+				t.Fatalf("content %q should carry the raw tool-call block", content)
+			}
+			if !strings.Contains(content, "write") && !strings.Contains(content, "arg_key") {
+				t.Fatalf("content %q lost the original body", content)
+			}
+		})
+	}
+}

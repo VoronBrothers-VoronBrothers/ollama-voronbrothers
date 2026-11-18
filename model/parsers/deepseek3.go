@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -303,10 +304,60 @@ func (p *DeepSeek3Parser) eat() ([]deepseekEvent, bool) {
 	return events, false
 }
 
+// deepseekLooseJSONRegex finds the first JSON-looking object in a tool-call
+// body, used when the model omitted the separator token.
+var deepseekLooseJSONRegex = regexp.MustCompile(`(?s)\{.*\}`)
+
+// parseDeepSeekLooseToolCall is a last-resort recovery for tool-call bodies
+// where the model omitted the separator token. It locates the first JSON
+// object in the body, takes the function name from the text preceding it and
+// parses the arguments (with repairJSON as a second chance).
+func parseDeepSeekLooseToolCall(content string) (api.ToolCall, bool) {
+	loc := deepseekLooseJSONRegex.FindStringIndex(content)
+	if loc == nil {
+		return api.ToolCall{}, false
+	}
+
+	toolName := strings.TrimSpace(strings.TrimRight(content[:loc[0]], " \t\r\n,:"))
+	// The name may itself be wrapped in quotes or leftovers of a partial
+	// separator; take the last non-empty token to stay forgiving.
+	if fields := strings.Fields(toolName); len(fields) > 0 {
+		toolName = strings.Trim(fields[len(fields)-1], `"'`+"`")
+	}
+	if toolName == "" || strings.ContainsAny(toolName, "{}[]") {
+		return api.ToolCall{}, false
+	}
+
+	argsJSON := content[loc[0]:loc[1]]
+
+	var args api.ToolCallFunctionArguments
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		repaired := repairJSON(argsJSON)
+		if err := json.Unmarshal([]byte(repaired), &args); err != nil {
+			return api.ToolCall{}, false
+		}
+	}
+
+	return api.ToolCall{
+		Function: api.ToolCallFunction{
+			Name:      toolName,
+			Arguments: args,
+		},
+	}, true
+}
+
 func (p *DeepSeek3Parser) parseToolCallContent(content string) (api.ToolCall, error) {
 	// Expected format: tool_name<｜tool▁sep｜>{args}
 	parts := strings.SplitN(content, deepseekToolSepTag, 2)
 	if len(parts) < 2 {
+		// Fallback: the model omitted the separator token but may still have
+		// emitted "<name> {...}". Extract the first JSON object and take the
+		// function name from the text before it.
+		if toolCall, ok := parseDeepSeekLooseToolCall(content); ok {
+			slog.Warn("deepseek tool call missing separator; recovered via JSON fallback",
+				"function", toolCall.Function.Name, "raw", truncateForLog(content, repairLogLimit))
+			return toolCall, nil
+		}
 		return api.ToolCall{}, errors.New("invalid format")
 	}
 
