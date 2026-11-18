@@ -84,8 +84,12 @@ func (p *Qwen3CoderParser) Add(s string, done bool) (content string, thinking st
 		case qwenEventRawToolCall:
 			toolCall, err := parseToolCall(event, p.tools)
 			if err != nil {
-				slog.Warn("qwen tool call parsing failed", "error", err)
-				return "", "", nil, err
+				// Soft fail: the model emitted a malformed tool call. Emit its raw
+				// text as content so the agent survives and can see what it
+				// produced, instead of crashing on an unparseable call.
+				slog.Warn("qwen tool call parsing failed; emitting raw text as content (soft fail)", "error", err)
+				sb.WriteString(toolOpenTag + event.raw + toolCloseTag)
+				continue
 			}
 			toolCall.Function.Index = p.callIndex
 			p.callIndex++
@@ -250,7 +254,20 @@ func parseToolCall(raw qwenEventRawToolCall, tools []api.Tool) (api.ToolCall, er
 	var functionCall XMLFunctionCall
 	err := xml.Unmarshal([]byte(xmlString), &functionCall)
 	if err != nil {
-		return api.ToolCall{}, err
+		// Second chance: the model sometimes emits mismatched or unclosed tags
+		// (a parameter closer where a function closer was meant, a dropped
+		// closing tag). Balance the elements and retry before giving up.
+		repaired := repairQwenXML(xmlString)
+		err2 := xml.Unmarshal([]byte(repaired), &functionCall)
+		if err2 != nil {
+			// Last chance: regex extraction of name + parameters without type
+			// coercion. If even the name is unrecoverable, soft-fail upstream.
+			extracted, ok := extractQwenToolCall(xmlString)
+			if !ok {
+				return api.ToolCall{}, fmt.Errorf("failed to parse tool call: %w", err)
+			}
+			functionCall = extracted
+		}
 	}
 
 	toolCall.Function = api.ToolCallFunction{
@@ -420,7 +437,40 @@ func parseTypedToolValue(raw string, paramType api.PropertyType) any {
 var (
 	qwenTagRegex    = regexp.MustCompile(`<(\w+)=([^>]+)>`)
 	qwenXMLTagRegex = regexp.MustCompile(`</?(?:function|parameter)(?:\s+name="[^"]*")?>`)
+
+	// Fallback extraction regexes run on the *transformed* XML, where tags look
+	// like <function name="x"> / <parameter name="y">. Values stay raw strings.
+	qwenFallbackNameRegex = regexp.MustCompile(`<function name="([^"]*)"`)
+	qwenFallbackParamRegex = regexp.MustCompile(`(?s)<parameter name="([^"]*)">(.*?)</` + `parameter>`)
+
 )
+
+// extractQwenToolCall is a last-resort fallback that pulls the function name
+// and raw parameter values out of badly mangled tool call XML. Returns false if
+// not even the function name can be recovered.
+func extractQwenToolCall(xmlString string) (XMLFunctionCall, bool) {
+	nameMatch := qwenFallbackNameRegex.FindStringSubmatch(xmlString)
+	if nameMatch == nil || strings.TrimSpace(nameMatch[1]) == "" {
+		return XMLFunctionCall{}, false
+	}
+	call := XMLFunctionCall{Name: strings.TrimSpace(nameMatch[1])}
+	for _, pm := range qwenFallbackParamRegex.FindAllStringSubmatch(xmlString, -1) {
+		param := XMLParameter{
+			Name:  strings.TrimSpace(pm[1]),
+			Value: unescapeXMLText(pm[2]),
+		}
+		call.Parameters = append(call.Parameters, param)
+	}
+	return call, true
+}
+
+// unescapeXMLText reverses the entity escaping done by escapeTextNode so that
+// fallback-extracted values match what a successful xml.Unmarshal would yield.
+func unescapeXMLText(s string) string {
+	s = strings.ReplaceAll(s, "&lt;", "<")
+	s = strings.ReplaceAll(s, "&gt;", ">")
+	return strings.ReplaceAll(s, "&amp;", "&")
+}
 
 // transformToXML transforms a raw qwen tool call with xml-like tags into valid
 // xml so that it can be parsed by any xml parser

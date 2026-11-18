@@ -244,18 +244,26 @@ func (p *DeepSeek3Parser) eat() ([]deepseekEvent, bool) {
 			startIdx := idx + len(deepseekToolCallBeginTag)
 			if endIdx := strings.Index(bufStr[startIdx:], deepseekToolCallEndTag); endIdx != -1 {
 				toolCallContent := bufStr[startIdx : startIdx+endIdx]
+				remaining := bufStr[startIdx+endIdx+len(deepseekToolCallEndTag):]
+				remaining = strings.TrimLeftFunc(remaining, unicode.IsSpace)
 
 				if toolCall, err := p.parseToolCallContent(toolCallContent); err == nil {
-					remaining := bufStr[startIdx+endIdx+len(deepseekToolCallEndTag):]
-					remaining = strings.TrimLeftFunc(remaining, unicode.IsSpace)
-
 					p.buffer.Reset()
 					p.buffer.WriteString(remaining)
 
 					events = append(events, deepseekEventToolCall{toolCall: toolCall})
 					return events, true
 				} else {
-					slog.Warn("deepseek tool call parsing failed", "error", err)
+					// Soft fail: the model emitted a malformed tool call. Consume
+					// the broken block so state advances (nothing gets stuck in
+					// the buffer) and emit its raw text as content so the agent
+					// survives and can see what it produced.
+					slog.Warn("deepseek tool call parsing failed; emitting raw text as content (soft fail)", "error", err)
+					p.buffer.Reset()
+					p.buffer.WriteString(remaining)
+
+					events = append(events, deepseekEventContent{content: deepseekToolCallBeginTag + toolCallContent + deepseekToolCallEndTag})
+					return events, true
 				}
 			}
 		}
@@ -306,7 +314,14 @@ func (p *DeepSeek3Parser) parseToolCallContent(content string) (api.ToolCall, er
 	argsJSON := strings.TrimSpace(parts[1])
 
 	var args api.ToolCallFunctionArguments
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+	err := json.Unmarshal([]byte(argsJSON), &args)
+	if err != nil {
+		// Second chance: models occasionally emit unbalanced brackets or a
+		// trailing comma. Repair and retry before soft-failing upstream.
+		repaired := repairJSON(argsJSON)
+		err = json.Unmarshal([]byte(repaired), &args)
+	}
+	if err != nil {
 		return api.ToolCall{}, err
 	}
 

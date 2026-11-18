@@ -121,8 +121,12 @@ func (p *Qwen3Parser) Add(s string, done bool) (content string, thinking string,
 		case qwen3EventRawToolCall:
 			toolCall, err := parseQwen3ToolCall(event, p.tools)
 			if err != nil {
-				slog.Warn("qwen3 tool call parsing failed", "error", err)
-				return "", "", nil, err
+				// Soft fail: the model emitted a malformed tool call. Emit its raw
+				// text as content so the agent survives and can see what it
+				// produced, instead of crashing on an unparseable call.
+				slog.Warn("qwen3 tool call parsing failed; emitting raw text as content (soft fail)", "error", err)
+				contentSb.WriteString(qwen3ToolOpenTag + event.raw + qwen3ToolCloseTag)
+				continue
 			}
 			toolCall.Function.Index = p.callIndex
 			p.callIndex++
@@ -349,7 +353,13 @@ func parseQwen3ToolCall(raw qwen3EventRawToolCall, tools []api.Tool) (api.ToolCa
 	}
 
 	if err := json.Unmarshal([]byte(raw.raw), &parsed); err != nil {
-		return api.ToolCall{}, fmt.Errorf("failed to parse JSON: %w", err)
+		// Second chance: models occasionally emit unbalanced brackets or a
+		// trailing comma. Repair and retry before soft-failing upstream.
+		repaired := repairJSON(raw.raw)
+		err2 := json.Unmarshal([]byte(repaired), &parsed)
+		if err2 != nil {
+			return api.ToolCall{}, fmt.Errorf("failed to parse JSON: %w", err)
+		}
 	}
 
 	if parsed.Name == "" {

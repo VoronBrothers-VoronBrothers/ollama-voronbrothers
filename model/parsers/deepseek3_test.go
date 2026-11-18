@@ -651,15 +651,17 @@ func TestDeepSeekParser_EdgeCases(t *testing.T) {
 			hasThinking:     false,
 		},
 		{
-			name:            "malformed_tool_call_missing_sep",
+			// Soft fail: the broken tool call block is consumed and its raw text
+			// is emitted as content so the agent survives.
+			name:            "malformed_tool_call_missing_sep_soft_fail",
 			input:           "Testing.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>bad_tool{\"arg\":\"value\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-			expectedContent: "Testing.",
+			expectedContent: "Testing.<｜tool▁call▁begin｜>bad_tool{\"arg\":\"value\"}<｜tool▁call▁end｜>",
 			hasThinking:     false,
 		},
 		{
-			name:            "malformed_tool_call_invalid_json",
+			name:            "malformed_tool_call_invalid_json_soft_fail",
 			input:           "Testing.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>bad_tool<｜tool▁sep｜>{invalid json}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-			expectedContent: "Testing.",
+			expectedContent: "Testing.<｜tool▁call▁begin｜>bad_tool<｜tool▁sep｜>{invalid json}<｜tool▁call▁end｜>",
 			hasThinking:     false,
 		},
 		{
