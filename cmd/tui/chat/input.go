@@ -69,6 +69,8 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/heartbeat", usage: "/heartbeat \"текст\"", description: "periodically send a message to AI", aliases: []string{"/авторитм"}},
 	{name: "/heartbeat-time", usage: "/heartbeat-time <секунды>", description: "set heartbeat interval (0=off)", aliases: []string{"/авторитм-тайм"}},
 	{name: "/heartbeat-count", usage: "/heartbeat-count [кол-во]", description: "set heartbeat message limit (default 100, 0=unlimited)", aliases: []string{"/авторитм-количество"}},
+	{name: "/ping-pong", description: "send 'ping' every 240 s × 10 messages (independent from heartbeat)", aliases: []string{"/пинг-понг"}},
+	{name: "/ping-pong-off", description: "stop Ping-Pong only (heartbeat stays untouched)", aliases: []string{"/пинг-понг-off"}},
 	{name: "/zip", usage: "/zip [on|off]", description: "toggle automatic context compaction (default on)", aliases: []string{"/зип"}},
 	{name: "/predsave-compaction", usage: "/predsave-compaction [on|off]", description: "globally toggle dialog JSON auto-save before compaction (default on; persisted in ~/.ollama/config.json)"},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
@@ -304,6 +306,23 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Heartbeat обновлён: %q каждые %d с", msg, int(m.heartbeatInterval.Seconds()))}))
 		}
 		return *m, cmd
+	case command == "/ping-pong" || command == "/пинг-понг":
+		// Ping-Pong: независимый канал — состояние heartbeat не трогаем вообще.
+		m.pingPongActive = true
+		m.pingPongCount = pingPongTotal
+		cmd := tea.Tick(pingPongInterval, func(time.Time) tea.Msg { return pingPongTickMsg{} })
+		m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Ping-Pong запущен: %q каждые %d с × %d сообщений (независимо от heartbeat)", "ping", int(pingPongInterval.Seconds()), pingPongTotal)}))
+		return *m, cmd
+	case command == "/ping-pong-off" || command == "/пинг-понг-off":
+		if m.pingPongActive {
+			sent := pingPongTotal - m.pingPongCount
+			m.pingPongActive = false
+			m.pingPongCount = 0
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Ping-Pong выключен (отправлено %d/%d). Heartbeat не тронут.", sent, pingPongTotal)}))
+		} else {
+			m.entries = append(m.entries, newChatEntry(chatEntry{role: "info", content: "Ping-Pong не активен"}))
+		}
+		return *m, nil
 	case command == "/zip":
 		return m.handleZipCommand(args)
 	case command == "/token":

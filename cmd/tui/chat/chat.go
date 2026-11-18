@@ -95,6 +95,12 @@ type Result struct {
 }
 
 //nolint:containedctx // chatModel is a Bubble Tea session model; the context is the run-scoped cancellation root.
+// Ping-Pong: независимый от heartbeat канал.
+const (
+	pingPongInterval = 240 * time.Second
+	pingPongTotal    = 10
+)
+
 type chatModel struct {
 	ctx          context.Context
 	opts         Options
@@ -180,6 +186,8 @@ type chatModel struct {
 	heartbeatMsg       string
 	heartbeatInterval  time.Duration
 	heartbeatCount     int // HBCOUNT-DEFAULT: лимит сообщений (0=безлимит)
+	pingPongActive   bool  // /ping-pong: независимый канал, не трогает heartbeat
+	pingPongCount    int   // сколько pings осталось отправить (старт = pingPongTotal)
 	err                error
 }
 
@@ -353,6 +361,31 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner++
 		cmd := m.scheduleTick()
 		return m, cmd
+
+	case pingPongTickMsg:
+		if !m.running && !m.compacting && m.pingPongActive {
+			model, cmd := m.startRun("ping")
+			cm := model.(chatModel)
+			cmds := []tea.Cmd{}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			cm.pingPongCount--
+			if cm.pingPongCount <= 0 {
+				// лимит исчерпан — останавливаем ping-pong
+				cm.pingPongActive = false
+				cm.pingPongCount = 0
+				cm.entries = append(cm.entries, newChatEntry(chatEntry{role: "info", content: fmt.Sprintf("Ping-Pong завершён: %d/%d сообщений отправлено", pingPongTotal, pingPongTotal)}))
+			} else {
+				cmds = append(cmds, tea.Tick(pingPongInterval, func(time.Time) tea.Msg { return pingPongTickMsg{} }))
+			}
+			return cm, tea.Batch(cmds...)
+		}
+		if m.pingPongActive {
+			// агент занят — повторим через 2 с (как heartbeat)
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return pingPongTickMsg{} })
+		}
+		return m, nil
 
 	case heartbeatTickMsg:
 		if !m.running && !m.compacting && m.heartbeatMsg != "" && m.heartbeatInterval > 0 {

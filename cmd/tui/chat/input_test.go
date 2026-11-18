@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -13,6 +14,47 @@ import (
 	coreagent "github.com/ollama/ollama/agent"
 	"github.com/ollama/ollama/api"
 )
+
+func TestChatPingPongIndependentFromHeartbeat(t *testing.T) {
+	// 1) /ping-pong стартует свой канал и не трогает состояние heartbeat
+	m := chatModel{input: []rune("/ping-pong")}
+	updated, cmd := m.handleSubmit()
+	fm := updated.(chatModel)
+	if !fm.pingPongActive || fm.pingPongCount != pingPongTotal {
+		t.Fatalf("ping-pong state = active=%v count=%d, want true/%d", fm.pingPongActive, fm.pingPongCount, pingPongTotal)
+	}
+	if fm.heartbeatMsg != "" || fm.heartbeatInterval > 0 {
+		t.Fatalf("ping-pong must not touch heartbeat: msg=%q interval=%s", fm.heartbeatMsg, fm.heartbeatInterval)
+	}
+	if cmd == nil {
+		t.Fatal("/ping-pong should schedule a tick command")
+	}
+
+	// 2) /ping-pong-off останавливает только ping-pong; heartbeat живёт своей жизнью
+	m2 := chatModel{
+		input:             []rune("/пинг-понг-off"),
+		pingPongActive:    true,
+		pingPongCount:     3,
+		heartbeatMsg:      "текст",
+		heartbeatInterval: 120 * time.Second,
+	}
+	updated2, _ := m2.handleSubmit()
+	fm2 := updated2.(chatModel)
+	if fm2.pingPongActive || fm2.pingPongCount != 0 {
+		t.Fatalf("ping-pong was not stopped: active=%v count=%d", fm2.pingPongActive, fm2.pingPongCount)
+	}
+	if fm2.heartbeatMsg != "текст" || fm2.heartbeatInterval != 120*time.Second {
+		t.Fatalf("heartbeat was touched by ping-pong-off: msg=%q interval=%s", fm2.heartbeatMsg, fm2.heartbeatInterval)
+	}
+
+	// 3) /ping-pong-off без активного ping-pong — просто инфо, состояние не меняется
+	m3 := chatModel{input: []rune("/ping-pong-off"), heartbeatMsg: "текст", heartbeatInterval: 120 * time.Second}
+	updated3, _ := m3.handleSubmit()
+	fm3 := updated3.(chatModel)
+	if fm3.pingPongActive || fm3.heartbeatMsg != "текст" {
+		t.Fatalf("no-op off changed state: active=%v msg=%q", fm3.pingPongActive, fm3.heartbeatMsg)
+	}
+}
 
 func TestChatSlashCommandsAreRecognizable(t *testing.T) {
 	// Регрессия 2026-11-08: запись /add без name стала «неизвестной» —

@@ -90,6 +90,9 @@ type chatTickMsg struct{}
 
 type heartbeatTickMsg struct{}
 
+// pingPongTickMsg — тик независимого канала /ping-pong (не пересекается с heartbeat)
+type pingPongTickMsg struct{}
+
 func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 	contextChanged := false
 	m.lastEventAt = time.Now()
