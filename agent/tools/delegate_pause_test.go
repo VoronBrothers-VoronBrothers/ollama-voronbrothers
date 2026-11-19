@@ -297,8 +297,8 @@ func TestListShowsPausedStatus(t *testing.T) {
 
 	// Не на паузе + сессия мертва → dead.
 	res, _ := d.list()
-	if !strings.Contains(res.Content, "💀 dead") {
-		t.Fatalf("want dead status, got: %s", res.Content)
+	if !strings.Contains(res.Content, "💀 DEAD") {
+		t.Fatalf("want DEAD status, got: %s", res.Content)
 	}
 
 	// На паузе, но никто не застыл и сессия мертва → paused (session gone).

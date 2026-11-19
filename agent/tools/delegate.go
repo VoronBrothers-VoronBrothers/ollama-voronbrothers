@@ -40,6 +40,7 @@ type agentInfo struct {
 	paused      bool
 	stoppedPids []int // все pids замороженные на паузе (для resume)
 	spawnedAt   time.Time
+	statePath   string // файл состояния, который пишет bee (см. delegate_state.go)
 }
 
 // beeDoneMarker — должен совпадать с doneMarker в bee/main.go.
@@ -52,19 +53,21 @@ func (d *Delegate) Name() string { return "delegate" }
 
 func (d *Delegate) Description() string {
 	return "Spawn and control sub-agents as separate live tmux processes. Actions: " +
-		"'spawn' starts an agent with a task; 'list' shows running agents; " +
+		"'spawn' starts an agent with a task; 'list' shows all agents with an explicit status " +
+		"(▶ WORKING / ✅ FINISHED / 🛑 STALLED / 💀 DEAD / ⏸ PAUSED); 'status' shows one agent's live state; " +
 		"'models' lists available agent brains (cloud providers + local ollama); " +
-		"'output' reads the agent's terminal output; " +
+		"'output' reads the agent's terminal output (prefixed with its live status); " +
 		"'stop' kills one; 'feed' sends it a message (at start or mid-run); " +
-		"'pause'/'resume' freeze/unfreeze its process. Sub-agents have full freedom; " +
-		"you only monitor and steer."
+		"'pause'/'resume' freeze/unfreeze its process. " +
+		"Sub-agents have full freedom; you only monitor and steer. " +
+		"Always check 'list' or 'output' before assuming an agent is still busy — the status line is authoritative."
 }
 
 func (d *Delegate) Schema() api.ToolFunction {
 	props := api.NewToolPropertiesMap()
 	props.Set("action", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "One of: spawn, list, models, output, stop, feed, pause, resume.",
+		Description: "One of: spawn, list, status, models, output, stop, feed, pause, resume.",
 	})
 	props.Set("task", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
@@ -76,7 +79,7 @@ func (d *Delegate) Schema() api.ToolFunction {
 	})
 	props.Set("id", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Agent id. Required for stop/feed/pause/resume; optional for spawn (auto-generated).",
+		Description: "Agent id. Required for stop/feed/pause/resume/status; optional for spawn (auto-generated).",
 	})
 	props.Set("message", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
@@ -104,6 +107,12 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 		return d.spawn(toolCtx.WorkingDir, toString(args["task"]), toString(args["model"]), toString(args["id"]))
 	case "list":
 		return d.list()
+	case "status":
+		id := strings.TrimSpace(toString(args["id"]))
+		if id == "" {
+			return d.list()
+		}
+		return d.status(id)
 	case "models":
 		return d.listModels(), nil
 	case "output":
@@ -139,7 +148,7 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 			return agent.ToolResult{Content: "Error: unhandled action '" + action + "'"}, nil
 		}
 	default:
-		return agent.ToolResult{Content: "Error: unknown action '" + action + "'. Use spawn|list|models|output|stop|feed|pause|resume."}, nil
+		return agent.ToolResult{Content: "Error: unknown action '" + action + "'. Use spawn|list|status|models|output|stop|feed|pause|resume."}, nil
 	}
 }
 
@@ -166,7 +175,10 @@ func (d *Delegate) spawn(cwd, task, model, id string) (agent.ToolResult, error) 
 		return agent.ToolResult{Content: fmt.Sprintf("Error: agent id %q already exists (session %s)", id, session)}, nil
 	}
 
-	cmdArgs := agentCommand(task, model) // команда «мозга» агента (bee / placeholder)
+	sp := stateFilePath(session)
+	_ = os.MkdirAll(filepath.Dir(sp), 0o755)
+
+	cmdArgs := withStateEnv(agentCommand(task, model), sp, session) // команда «мозга» агента (bee / placeholder)
 	// ОДНА строка без `--`: tmux оборачивает её в собственный sh -c — это
 	// важно, см. agentCommand (setsid не может быть прямым ребёнком пейна).
 	out, err := exec.CommandContext(context.Background(), "tmux",
@@ -177,7 +189,7 @@ func (d *Delegate) spawn(cwd, task, model, id string) (agent.ToolResult, error) 
 	}
 
 	panePID := panePIDOf(session)
-	info := &agentInfo{id: id, session: session, panePID: panePID, task: task, model: model, spawnedAt: time.Now()}
+	info := &agentInfo{id: id, session: session, panePID: panePID, task: task, model: model, spawnedAt: time.Now(), statePath: sp}
 	d.mu.Lock()
 	d.agents[id] = info
 	d.mu.Unlock()
@@ -199,29 +211,11 @@ func (d *Delegate) list() (agent.ToolResult, error) {
 	}
 	var b strings.Builder
 	for _, a := range infos {
-		status := "▶ working"
-		if a.paused {
-			frozen := 0
-			for _, pid := range a.stoppedPids {
-				if procState(pid) == "T" {
-					frozen++
-				}
-			}
-			if frozen > 0 {
-				status = fmt.Sprintf("⏸ PAUSED (frozen %d pid)", frozen)
-			} else if tmuxSessionAlive(a.session) {
-				// Пауза «пометка» есть, но никто не застыл — честно пишем,
-				// что freeze потерян (например, всё дерево завершилось само).
-				status = "⚠️ PAUSE LOST"
-			} else {
-				status = "⏸ paused (session gone)"
-			}
-		} else if !tmuxSessionAlive(a.session) {
-			status = "💀 dead"
-		} else if lastPaneLineIsDone(a.session) {
-			status = "✅ done"
-		}
+		status := d.agentStatusLine(a)
 		fmt.Fprintf(&b, "- %s [%s] session=%s pid=%d age=%s\n    task: %s\n", a.id, status, a.session, a.panePID, time.Since(a.spawnedAt).Round(time.Second), a.task)
+		if detail := stateDetail(a); detail != "" {
+			b.WriteString(detail + "\n")
+		}
 	}
 	return agent.ToolResult{Content: strings.TrimSpace(b.String())}, nil
 }
@@ -239,11 +233,9 @@ func (d *Delegate) output(id string, n int) (agent.ToolResult, error) {
 	if text == "" {
 		text = "(no output yet)"
 	}
-	status := ""
-	if !lastPaneLineIsDone(a.session) {
-		status = "\n⏳ AGENT IS STILL WORKING / АГЕНТ ЕЩЁ РАБОТАЕТ"
-	}
-	return agent.ToolResult{Content: fmt.Sprintf("[agent %s] (last %d lines)\n%s%s", id, n, text, status)}, nil
+	header := fmt.Sprintf("[agent %s] status: %s\n(last %d lines)", id, d.agentStatusLine(a), n)
+	note := agentWorkNote(a, d.agentStatusLine(a))
+	return agent.ToolResult{Content: header + "\n" + text + note}, nil
 }
 
 func (d *Delegate) stop(id string) (agent.ToolResult, error) {
@@ -271,6 +263,10 @@ func (d *Delegate) stop(id string) (agent.ToolResult, error) {
 	d.mu.Lock()
 	delete(d.agents, id)
 	d.mu.Unlock()
+	if sp := a.statePath; sp != "" {
+		// Файл оставляем как историю, но помечаем, что агента остановили руками.
+		markStateStopped(sp)
+	}
 	extra := ""
 	if killed > 0 {
 		extra = fmt.Sprintf(", force-killed %d leftover process(es)", killed)
@@ -497,7 +493,7 @@ func agentCommand(task, model string) []string {
 	// setsid БЕЗ exec, как ребёнок нашего bash: с `exec` tmux-пейн умирал
 	// (EPERM-fork fallback убивал родителя), а обычный child проходит
 	// setsid() in-place. bash не group leader → fork не нужен.
-	return []string{"/bin/bash -c " + shellQuote("setsid -- " + b.String() + "; exit $?")}
+	return []string{"/bin/bash -c " + shellQuote("setsid -- "+b.String()+"; exit $?")}
 }
 
 // brainArgs — «голая» команда мозга без setsid-обёртки.

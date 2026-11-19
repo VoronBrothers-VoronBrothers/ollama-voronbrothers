@@ -13,13 +13,10 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,12 +28,11 @@ var (
 	flagModel  string
 	flagTask   string
 	maxRoundsN = 300 // бюджет раундов на один запрос; сбрасывается при correction
-	// cmdTimeout — дедлайн на ОДНУ команду run_command у под-агента.
-	// Жёсткий потолок 30с: иначе висящая команда держит tmux-pane «замороженным»
-	// и саб-агент зависает в терминале (основной bumblebee это не трогает).
-	cmdTimeout = 30 * time.Second
 )
 
+// doneMarker — автоматический маркер окончания работы модели под-агента
+// (печатает код bee, а не LLM). Должен совпадать с beeDoneMarker в
+// agent/tools/delegate.go.
 const doneMarker = "[bee] DONE {end}"
 
 func emitDone(reason string) {
@@ -61,12 +57,26 @@ func main() {
 		flagTask = os.Getenv("BEE_TASK")
 	}
 
+	initStateFile(flagModel)
+	stopHeartbeat := startHeartbeat()
+	defer stopHeartbeat()
+	defer func() {
+		// Финальная запись: файл остаётся после выхода, чтобы delegate мог
+		// показать историю («закончил 3 минуты назад, причина …»).
+		updateState(func(s *beeState) {
+			s.Status = statusExited
+			s.Phase = "exited"
+			s.Waiting = false
+		})
+	}()
+
 	ep := resolveEndpoint(flagModel)
 	// Если prefix-match нашёл полное имя — обновляем flagModel для API запросов.
 	if ep.resolvedModel != "" {
 		flagModel = ep.resolvedModel
 	}
 	fmt.Printf("[bee] model=%s endpoint=%s provider=%s\n", flagModel, ep.baseURL, ep.provider)
+	updateState(func(s *beeState) { s.Model = flagModel })
 
 	shell := newShell()
 	defer shell.close()
@@ -83,6 +93,14 @@ func main() {
 
 	// REPL: ждём следующую задачу или /exit.
 	for {
+		updateState(func(s *beeState) {
+			// Статус задачи НЕ меняем: если она упала — остаётся error,
+			// если закончилась — остаётся idle. Флаг waiting говорит,
+			// что процесс жив и готов принять новую задачу.
+			s.Waiting = true
+			s.Phase = "waiting for next task"
+			s.Tool = ""
+		})
 		fmt.Print("[bee] ready (type /exit to quit): ")
 		line := waitStdin(corrCh)
 		line = strings.TrimSpace(line)
@@ -135,6 +153,15 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 	// Статичная метка: всё от пользователя (стартовая задача, REPL-строки,
 	// поправки) — USER. Ответы модели — общее имя AI.
 	fmt.Printf("\nUSER: %s\n", strings.TrimSpace(task))
+	updateState(func(s *beeState) {
+		s.Task = strings.TrimSpace(task)
+		s.Waiting = false
+		s.Status = statusWorking
+		s.Phase = "starting task"
+		s.RoundsLeft = maxRoundsN
+		s.Round = 0
+		s.Reason = ""
+	})
 	messages := []chatMsg{
 		{Role: "system", Content: systemPrompt()},
 		{Role: "user", Content: task},
@@ -156,12 +183,26 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 		if corrections > 0 {
 			left = maxRoundsN
 			fmt.Printf("[bee] rounds reset by supervisor correction (%d left)\n", left)
+			updateState(func(s *beeState) {
+				s.RoundsLeft = left
+				s.Phase = "applying supervisor correction"
+			})
 		}
 
+		updateState(func(s *beeState) {
+			s.Round++
+			s.Phase = "model call"
+			s.Tool = ""
+		})
 		resp, err := chatOnce(client, ep, messages)
 		if err != nil {
 			fmt.Printf("[bee] ERROR model call: %v\n", err)
-			emitDone("error")
+			updateState(func(s *beeState) {
+				s.Status = statusError
+				s.Phase = "model call failed"
+				s.Reason = err.Error()
+			})
+			emitDone("error: " + err.Error())
 			return
 		}
 		messages = append(messages, resp.message)
@@ -173,6 +214,12 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 
 		if len(resp.toolCalls) == 0 {
 			fmt.Printf("\nAI: %s\n", strings.TrimSpace(resp.message.Content))
+			updateState(func(s *beeState) {
+				s.Status = statusIdle
+				s.Phase = "task finished"
+				s.Tool = ""
+				s.Reason = "final answer"
+			})
 			emitDone("")
 			return
 		}
@@ -184,14 +231,24 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 			}
 			args := map[string]any{}
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			updateState(func(s *beeState) {
+				s.Phase = "running tool " + name
+				s.Tool = name
+			})
 			res := dispatchTool(shell, name, args)
 			fmt.Printf("[bee] tool=%s => %d bytes\n%s\n", name, len(res), tail(res, 2000))
 			messages = append(messages, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: res})
 		}
 
 		left--
+		updateState(func(s *beeState) { s.RoundsLeft = left })
 		if left <= 0 {
 			fmt.Println("[bee] max rounds reached; stopping.")
+			updateState(func(s *beeState) {
+				s.Status = statusMaxRounds
+				s.Phase = "stopped"
+				s.Reason = fmt.Sprintf("max rounds (%d) reached", maxRoundsN)
+			})
 			emitDone("max-rounds")
 			return
 		}
@@ -200,22 +257,76 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 
 // dispatchTool — разветвление tool-вызовов: run_command идёт в персистентный
 // bash, read/write/edit работают с файлами напрямую (без round-trip через shell).
-func dispatchTool(shell *shell, name string, args map[string]any) string {
+func dispatchTool(sh *shell, name string, args map[string]any) string {
 	switch name {
 	case "read":
-		return toolRead(shell, args)
+		return toolRead(sh, args)
 	case "write":
-		return toolWrite(shell, args)
+		return toolWrite(sh, args)
 	case "edit":
-		return toolEdit(shell, args)
+		return toolEdit(sh, args)
 	default:
-		cmdStr, _ := args["command"].(string)
-		out, rc, rerr := shell.run(cmdStr)
-		if rerr != nil {
-			out = fmt.Sprintf("(run_command error: %v)", rerr)
-		}
-		return fmt.Sprintf("exit=%d\n%s", rc, out)
+		return runCommand(sh, args)
 	}
+}
+
+// lastRunAt — время старта предыдущего run_command (для строки «Since last …»).
+// Защищено мьютексом не нужно: bee однопоточен по tool-loop.
+var lastRunAt time.Time
+
+// runCommand — семантика как у bash_long основного агента:
+//   - необязательный аргумент timeout (секунды, 60-900, дефолт 120);
+//   - верхняя граница — не «жди всегда», команда возвращается как только
+//     закончилась;
+//   - префикс [Time: … | Duration: … | Since last …] — модель видит, сколько
+//     реально шла сборка и сколько прошло между запусками;
+//   - каждые 10 с в пейн печатается строка прогресса, чтобы было видно,
+//     что долгая команда НЕ висит и под-агент жив.
+func runCommand(sh *shell, args map[string]any) string {
+	cmdStr, _ := args["command"].(string)
+	if err := rejectSuicidalCommand(cmdStr); err != nil {
+		return "(refused) " + err.Error()
+	}
+	t := callTimeout(args)
+	start := time.Now()
+	fmt.Printf("[bee] run_command (timeout %s): %s\n", formatDur(t), firstLine(cmdStr))
+
+	out, rc, rerr := sh.run(cmdStr, t, func(elapsed, limit time.Duration) {
+		fmt.Printf("[bee] … still running: %s / %s elapsed\n", formatDur(elapsed), formatDur(limit))
+		updateState(func(s *beeState) {
+			s.Phase = fmt.Sprintf("run_command (%s elapsed)", formatDur(elapsed))
+		})
+	})
+	end := time.Now()
+
+	var prevDelta string
+	if !lastRunAt.IsZero() {
+		d := start.Sub(lastRunAt)
+		if d < 0 {
+			d = 0
+		}
+		prevDelta = " | Since last run_command: " + formatDur(d)
+	}
+	lastRunAt = end
+
+	if rerr != nil {
+		out = fmt.Sprintf("(%v)\n%s", rerr, out)
+	}
+	prefix := fmt.Sprintf("[Time: %s | Duration: %s%s]\n",
+		end.UTC().Format(time.RFC3339), formatDur(end.Sub(start)), prevDelta)
+	return fmt.Sprintf("%sexit=%d\n%s", prefix, rc, out)
+}
+
+// firstLine — первая строка команды для лога/фазы (длинные команды режем).
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
 
 // beeTools — схемы инструментов, которые видит модель под-агента.
@@ -230,8 +341,14 @@ func beeTools() []map[string]any {
 	return []map[string]any{
 		{"type": "function", "function": map[string]any{
 			"name":        "run_command",
-			"description": "Run a shell command on this machine in a persistent bash (cwd is kept between calls). Returns stdout+stderr and exit code.",
-			"parameters":  obj(map[string]any{"command": map[string]any{"type": "string"}}, "command"),
+			"description": "Run a shell command on this machine in a persistent bash (cwd is kept between calls). Optional 'timeout' in seconds (60-900, default 120) for long jobs; returns as soon as the command finishes. Returns stdout+stderr and exit code.",
+			"parameters": obj(map[string]any{
+				"command": map[string]any{"type": "string"},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "Optional upper bound in seconds (60-900, default 120). Set it to the expected duration of the command; do not blindly use the maximum.",
+				},
+			}, "command"),
 		}},
 		{"type": "function", "function": map[string]any{
 			"name":        "read",
@@ -275,7 +392,7 @@ func expandPath(shell *shell, p string) string {
 		}
 	}
 	if !filepath.IsAbs(p) {
-		if cwd, _, err := shell.run("pwd"); err == nil && strings.TrimSpace(cwd) != "" {
+		if cwd, _, err := shell.run("pwd", 0, nil); err == nil && strings.TrimSpace(cwd) != "" {
 			cwd = strings.TrimSpace(cwd)
 			if cwd == "/" {
 				p = "/" + strings.TrimPrefix(p, "/")
@@ -407,7 +524,8 @@ type chatMsg struct {
 }
 
 func systemPrompt() string {
-	return "You are a focused sub-agent with tools: run_command (persistent bash, cwd persists), read (file text; optional start/end lines), write (create/overwrite file), edit (exact old→new replacement). Relative paths use the shell's cwd. Prefer read/write/edit over cat/sed/echo.\n" +
+	return "You are a focused sub-agent with tools: run_command (persistent bash, cwd persists; optional timeout 60-900s, default 120s), read (file text; optional start/end lines), write (create/overwrite file), edit (exact old→new replacement). Relative paths use the shell's cwd. Prefer read/write/edit over cat/sed/echo.\n" +
+		"Long jobs (builds, big downloads, tests) are fine: pass timeout up to 900 seconds instead of splitting the work or polling. The call returns as soon as the command finishes — the timeout is only an upper bound.\n" +
 		"Be economical: minimize tool calls. Don't re-read files you've already seen. Batch independent operations in one command where possible. If 2-3 searches clarify the task, stop searching and act. Keep responses short — no preamble, no restating the task. When done, reply with a concise final summary (~20 lines) and stop calling tools." +
 		"Work step by step; prefer small verifiable actions."
 }
@@ -576,71 +694,6 @@ drain:
 		}
 	}
 	return out
-}
-
-// --- персистентный bash (руки агента) ---
-type shell struct {
-	cmd   *exec.Cmd
-	in    io.WriteCloser
-	lines chan string
-}
-
-func newShell() *shell {
-	cmd := exec.Command("bash")
-	stdin, _ := cmd.StdinPipe()
-	pr, _ := cmd.StdoutPipe()
-	if err := cmd.Start(); err != nil {
-		panic(err)
-	}
-	s := &shell{cmd: cmd, in: stdin, lines: make(chan string, 256)}
-	go func() {
-		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 1024*1024), 1024*1024)
-		for sc.Scan() {
-			s.lines <- sc.Text()
-		}
-		close(s.lines)
-	}()
-	return s
-}
-
-func (s *shell) run(command string) (string, int, error) {
-	n := randN()
-	marker := fmt.Sprintf("__BEE_END_%d__", n)
-	if _, err := s.in.Write([]byte(fmt.Sprintf("%s\necho %s $?\n", command, marker))); err != nil {
-		return "", -1, err
-	}
-	var b strings.Builder
-	deadline := time.After(cmdTimeout)
-	for {
-		select {
-		case <-deadline:
-			s.in.Write([]byte("kill 0\n")) // best effort: убить текущую команду в shell-группе
-			return "TIMEOUT after " + cmdTimeout.String(), -1, fmt.Errorf("command timed out")
-		case line, ok := <-s.lines:
-			if !ok {
-				return b.String(), -1, fmt.Errorf("shell closed")
-			}
-			if idx := strings.Index(line, marker); idx >= 0 {
-				rc := 0
-				fmt.Sscanf(strings.TrimSpace(line[idx+len(marker):]), "%d", &rc)
-				return b.String(), rc, nil
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-}
-
-func (s *shell) close() {
-	_ = s.cmd.Process.Kill()
-	_ = s.cmd.Wait()
-}
-
-func readStdin(ch chan string) {
-	sc := bufio.NewScanner(os.Stdin)
-	for sc.Scan() {
-		ch <- sc.Text()
-	}
 }
 
 // --- helpers ---

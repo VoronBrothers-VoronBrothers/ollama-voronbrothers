@@ -2436,3 +2436,43 @@ func TestTokensNoteFromResponse(t *testing.T) {
 		t.Fatalf("total = %d", got)
 	}
 }
+
+// TestQueuedHintShownRightOfWorking — сообщение, поставленное в очередь во время
+// генерации, обязано быть видно СПРАВА от индикатора Working (раньше строка
+// «queued (N)» исчезала, потому что activityLine перебивал notificationLine).
+func TestQueuedHintShownRightOfWorking(t *testing.T) {
+	m := chatModel{running: true, pendingPrompts: []string{"сделай ещё вот это"}}
+	lines := m.renderActionStatusLines(120)
+	if len(lines) != 1 {
+		t.Fatalf("want one status line, got %d: %#v", len(lines), lines)
+	}
+	line := stripANSI(lines[0])
+	workingIdx := strings.Index(line, "Working")
+	queuedIdx := strings.Index(line, "queued (1)")
+	if workingIdx < 0 || queuedIdx < 0 {
+		t.Fatalf("line = %q, want both Working and queued hint", line)
+	}
+	if queuedIdx < workingIdx {
+		t.Fatalf("line = %q, want queued hint to the RIGHT of Working", line)
+	}
+	if !strings.Contains(line, "сделай") {
+		t.Fatalf("line = %q, want first queued prompt preview", line)
+	}
+}
+
+// TestQueuedHintAloneWithoutActivity — при пустой очереди подсказки нет, а без
+// активности очередь показывается отдельной строкой (не теряется).
+func TestQueuedHintAloneWithoutActivity(t *testing.T) {
+	m := chatModel{}
+	if got := m.queuedHint(); got != "" {
+		t.Fatalf("empty queue should produce no hint, got %q", got)
+	}
+	m.pendingPrompts = []string{"a", "b"}
+	lines := m.renderActionStatusLines(80)
+	if len(lines) != 1 || !strings.Contains(stripANSI(lines[0]), "queued (2)") {
+		t.Fatalf("lines = %#v, want standalone queued hint", lines)
+	}
+	if got := m.notificationLine(); !strings.Contains(got, "queued (2)") {
+		t.Fatalf("notificationLine = %q, want queued hint", got)
+	}
+}

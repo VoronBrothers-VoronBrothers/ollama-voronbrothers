@@ -359,14 +359,47 @@ func (m chatModel) renderModelStatusLines(width int) []string {
 	return lines
 }
 
+// queuedSeparator отделяет индикатор активности от подсказки об очереди:
+// «Working [bash]  ·  ⏳ queued (2): текст…».
+const queuedSeparator = "  ·  "
+
+// renderActionStatusLines — одна строка состояния снизу от транскрипта.
+//
+// Очередь (pendingPrompts) показывается СПРАВА от индикатора Working, а не
+// вместо него: иначе во время генерации строка «queued (N)» исчезала совсем
+// (activityLine перебивал notificationLine) и было непонятно, что сообщение
+// встало в очередь.
 func (m chatModel) renderActionStatusLines(width int) []string {
-	if activity := m.activityLine(); activity != "" {
-		return []string{chatMetaStyle.Render(inputBoxTextIndent() + activity)}
+	activity := m.activityLine()
+	queued := m.queuedHint()
+	switch {
+	case activity != "":
+		line := activity
+		if queued != "" {
+			line += queuedSeparator + queued
+		}
+		return []string{chatMetaStyle.Render(clipRenderedLine(inputBoxTextIndent()+line, width))}
+	case queued != "":
+		return []string{chatMetaStyle.Render(clipRenderedLine(inputBoxTextIndent()+queued, width))}
 	}
 	if notificationLines := m.renderNotificationLines(width); len(notificationLines) > 0 {
 		return notificationLines
 	}
 	return nil
+}
+
+// queuedHint — компактная подсказка об очереди: «⏳ queued (N): первая строка…».
+// Пустая строка, если очередь пуста. Текст первого сообщения режем, чтобы
+// подсказка не вытесняла индикатор Working с экрана.
+func (m chatModel) queuedHint() string {
+	if len(m.pendingPrompts) == 0 {
+		return ""
+	}
+	first := strings.ReplaceAll(strings.TrimSpace(m.pendingPrompts[0]), "\n", " ")
+	if r := []rune(first); len(r) > 40 {
+		first = string(r[:40]) + "…"
+	}
+	return fmt.Sprintf("⏳ queued (%d): %s", len(m.pendingPrompts), first)
 }
 
 func transcriptInputGap(maxHeight, bottomLineCount, transcriptLineCount int) int {
@@ -1605,12 +1638,8 @@ func truncateRunes(value string, limit int) string {
 }
 
 func (m chatModel) notificationLine() string {
-	if len(m.pendingPrompts) > 0 {
-		first := strings.ReplaceAll(strings.TrimSpace(m.pendingPrompts[0]), "\n", " ")
-		if r := []rune(first); len(r) > 40 {
-			first = string(r[:40]) + "…"
-		}
-		return fmt.Sprintf("queued (%d): %s", len(m.pendingPrompts), first)
+	if hint := m.queuedHint(); hint != "" {
+		return hint
 	}
 	status := strings.TrimSpace(m.status)
 	if status == "" || status == "ready" {
