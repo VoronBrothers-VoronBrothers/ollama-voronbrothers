@@ -174,3 +174,63 @@ func TestGhostAdoptStopKillsSession(t *testing.T) {
 	}
 	t.Logf("stop result: %s", res.Content)
 }
+
+// TestSweepBackfillsBrainPIDForExistingEntry — регрессия на E2E-баг: spawn()
+// кладёт агента в реестр с brainPid=0, sweep раньше SKIP'ил такие id и ghost
+// без state-файла оставался невидимым (DEAD) и неубиваемым stop'ом.
+func TestSweepBackfillsBrainPIDForExistingEntry(t *testing.T) {
+	sp := filepath.Join(os.TempDir(), "bee-state", "ghost-backfill-test.json") // файл НЕ создаём
+	_ = os.MkdirAll(filepath.Dir(sp), 0o755)
+
+	cmd := exec.Command("/bin/bash", "-c", "set -m; sleep 120 & exec sleep 120")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Env = append(os.Environ(), "BEE_STATE="+sp, "BEE_SESSION=bee-ghost-backfill-test")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start fake brain: %v", err)
+	}
+	P := cmd.Process.Pid
+	defer func() {
+		for _, p := range sessionPIDs(P) {
+			_ = exec.Command("kill", "-9", strconv.Itoa(p)).Run()
+		}
+	}()
+	time.Sleep(400 * time.Millisecond)
+	if procState(P) == "" {
+		t.Skipf("fake brain died too fast")
+	}
+
+	d := &Delegate{agents: map[string]*agentInfo{}}
+	// Как после spawn(): entry есть, но brainPid неизвестен.
+	d.agents["ghost-backfill-test"] = &agentInfo{
+		id: "ghost-backfill-test", session: "bee-ghost-backfill-test",
+		panePID: 0, statePath: sp,
+	}
+
+	n := d.sweepGhosts()
+	if n != 0 {
+		t.Fatalf("sweep adopted %d entries, want 0 (id already in registry)", n)
+	}
+	a := d.agents["ghost-backfill-test"]
+	if a.brainPid != P {
+		t.Fatalf("brainPid not backfilled: got %d, want %d", a.brainPid, P)
+	}
+	if p := d.liveBrainPID(a); p == 0 {
+		t.Fatalf("liveBrainPID = 0 — ghost без state-файла невидим")
+	}
+
+	res, err := d.stop("ghost-backfill-test")
+	if err != nil {
+		t.Fatalf("stop returned error: %v", res)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_ = cmd.Wait()
+	if procAlive(P) {
+		t.Errorf("brain pid %d survived stop (no state file): %s", P, res.Content)
+	}
+	for _, p := range sessionPIDs(P) {
+		if procAlive(p) {
+			t.Errorf("session member pid %d survived stop", p)
+		}
+	}
+	t.Logf("stop result: %s", res.Content)
+}

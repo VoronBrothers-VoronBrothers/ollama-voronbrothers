@@ -85,7 +85,13 @@ func (d *Delegate) sweepGhosts() int {
 		if id == "" || id == g.session { // нет префикса bee- — соберём id из pid
 			id = fmt.Sprintf("ghost-%d", g.pid)
 		}
-		if _, ok := d.agents[id]; ok {
+		if a, ok := d.agents[id]; ok {
+			// Агент уже в реестре (spawn из этой сессии), но spawn не знает
+			// brain-pid — backfill'им его: иначе ghost без state-файла будет
+			// виден как DEAD и stop() не найдёт что убить.
+			if a.brainPid == 0 {
+				a.brainPid = g.pid
+			}
 			continue
 		}
 		spawnedAt, task, model := time.Now(), "", ""
