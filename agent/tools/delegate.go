@@ -40,6 +40,7 @@ type agentInfo struct {
 	model       string
 	paused      bool
 	stoppedPids []int // все pids замороженные на паузе (для resume)
+	brainPid    int   // pid живого мозга (заполняется sweepGhosts; stop бьёт по нему, если state-файла нет)
 	spawnedAt   time.Time
 	statePath   string // файл состояния, который пишет bee (см. delegate_state.go)
 }
@@ -200,6 +201,10 @@ func (d *Delegate) spawn(cwd, task, model, id string) (agent.ToolResult, error) 
 }
 
 func (d *Delegate) list() (agent.ToolResult, error) {
+	// Ghost sweep: живые мозги вне реестра (tmux умер, крах, чужая сессия)
+	// adopt'ятся и станут видны — агент не должен работать «невидимо».
+	d.sweepGhosts()
+
 	d.mu.Lock()
 	infos := make([]*agentInfo, 0, len(d.agents))
 	for _, a := range d.agents {
@@ -264,13 +269,34 @@ func (d *Delegate) stop(id string) (agent.ToolResult, error) {
 		inTree[pid] = true
 	}
 	// Setsid-мозг может пережить смерть своего пейна (осиротевший процесс),
-	// тогда он не входит в дерево пейна. Берём его PID из state-файла и
-	// убиваем всю process group: мозг — session leader, значит -pid = всё дерево.
-	if st, ok := readBeeState(a.statePath); ok && st.PID > 0 && !inTree[st.PID] && procState(st.PID) != "" {
-		if err := syscall.Kill(-st.PID, syscall.SIGKILL); err != nil {
-			_ = syscall.Kill(st.PID, syscall.SIGKILL) // группа не нашлась — бьём по pid напрямую
+	// тогда он не входит в дерево пейна. Берём его PID из state-файла
+	// (или brainPid, записанный при adopt'е ghost) и убиваем: сначала всю
+	// process group (-pid = группа мозга), затем ВСЮ session — дети run_command
+	// могут жить в собственных пgrp внутри той же session и пережить -pid.
+	brain := 0
+	if st, ok := readBeeState(a.statePath); ok && st.PID > 0 {
+		brain = st.PID
+	}
+	if brain == 0 {
+		brain = a.brainPid // ghost без state-файла (см. sweepGhosts)
+	}
+	if brain > 0 && !inTree[brain] && procAlive(brain) {
+		if err := syscall.Kill(-brain, syscall.SIGKILL); err != nil {
+			_ = syscall.Kill(brain, syscall.SIGKILL) // группа не нашлась — бьём по pid напрямую
 		}
 		killed++
+		// Session-wide добивка только если brain — НАСТОЯЩИЙ session leader
+		// (sess == pid). Иначе его «сессия» — унаследованная чужая (например,
+		// шелл тест-харнесса), и убийство всей сессии зацепит не своих.
+		if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", brain)); err == nil && parseSession(string(data)) == brain {
+			for _, p := range sessionPIDs(brain) {
+				if inTree[p] || !procAlive(p) {
+					continue
+				}
+				_ = exec.Command("kill", "-9", strconv.Itoa(p)).Run()
+				killed++
+			}
+		}
 	}
 	d.mu.Lock()
 	delete(d.agents, id)
@@ -383,6 +409,16 @@ func procState(pid int) string {
 	return fields[0]
 }
 
+// procAlive — процесс жив и НЕ zombie. Zombie (Z) — уже мёртв, просто не
+// собран родительский Wait: /proc/<pid>/stat у него существует, и наивная
+// проверка «файл читается» считает его живым.
+
+// procAlive — процесс жив и не zombie (см. procState).
+func procAlive(pid int) bool {
+	st := procState(pid)
+	return st != "" && st[0] != 'Z'
+}
+
 // resume — SIGCONT всем pids, замороженным на паузе. Мертвые процессы не ошибка.
 func (d *Delegate) resume(id string) (agent.ToolResult, error) {
 	a := d.getAgent(id)
@@ -468,6 +504,53 @@ func parsePPID(stat string) int {
 	}
 	ppid, _ := strconv.Atoi(fields[1])
 	return ppid
+}
+
+// parseSession — session id (поле 6) из /proc/<pid>/stat: fields[3] после ')'.
+func parseSession(stat string) int {
+	idx := strings.LastIndex(stat, ")")
+	if idx < 0 || len(stat) <= idx+2 {
+		return 0
+	}
+	fields := strings.Fields(stat[idx+2:])
+	if len(fields) < 4 {
+		return 0
+	}
+	sess, _ := strconv.Atoi(fields[3])
+	return sess
+}
+
+// sessionPIDs — все живые pids с данным session id. Нужно для session-wide kill:
+// Kill(-pid) бьёт только по process group мозга, а дети run_command (bash,
+// sleep и т.п.) могут жить в своих пgrp внутри той же session — они бы
+// переживали stop как невидимые сироты.
+func sessionPIDs(sess int) []int {
+	var out []int
+	if sess <= 0 {
+		return out
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return out
+	}
+	self := os.Getpid()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == self {
+			continue // self — страховка от гонки pid-reuse: не стрелять в себя
+		}
+		data, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if err != nil {
+			continue // процесс исчез между ReadDir и ReadFile — ок
+		}
+		if parseSession(string(data)) == sess {
+			out = append(out, pid)
+		}
+	}
+	return out
 }
 
 func (d *Delegate) getAgent(id string) *agentInfo {

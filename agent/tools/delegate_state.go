@@ -189,6 +189,9 @@ func (d *Delegate) agentStatusLine(a *agentInfo) string {
 	// Файла нет (старый bee или падение до инициализации) — старая эвристика.
 	switch {
 	case !alive:
+		if p := d.liveBrainPID(a); p > 0 {
+			return fmt.Sprintf("👻 GHOST (no state file, tmux gone, brain pid %d alive — stop it)", p)
+		}
 		return "💀 DEAD (tmux session gone)"
 	case lastPaneLineIsDone(a.session):
 		return "✅ FINISHED (pane marker)"
@@ -201,7 +204,7 @@ func (d *Delegate) agentStatusLine(a *agentInfo) string {
 // (PID из state-файла) всё ещё жив. Такой агент heartbeat пишет, но задачи не
 // примет (некуда читать stdin), пока его явно не stopнуть.
 func orphanedLine(st beeStateSnapshot) string {
-	if st.PID <= 0 || procState(st.PID) == "" {
+	if st.PID <= 0 || !procAlive(st.PID) {
 		return ""
 	}
 	return fmt.Sprintf("⚠️ ORPHANED (tmux pane gone, brain pid %d still alive — stop it): %s", st.PID, st.humanStatus())
@@ -339,7 +342,7 @@ func agentWorkNote(a *agentInfo, statusLine string) string {
 	switch {
 	case strings.Contains(statusLine, "PAUSED"), strings.Contains(statusLine, "STALLED"):
 		return "\n⚠️ AGENT IS NOT PROGRESSING / АГЕНТ НЕ РАБОТАЕТ: " + statusLine
-	case strings.Contains(statusLine, "ORPHANED"):
+	case strings.Contains(statusLine, "ORPHANED"), strings.Contains(statusLine, "GHOST"):
 		return "\n⚠️ AGENT IS ORPHANED / АГЕНТ ОСИРОТЕЛ (жив без пейна, stop его): " + statusLine
 	case strings.Contains(statusLine, "WORKING"), strings.Contains(statusLine, "STARTING"):
 		return "\n⏳ AGENT IS STILL WORKING / АГЕНТ ЕЩЁ РАБОТАЕТ: " + statusLine
