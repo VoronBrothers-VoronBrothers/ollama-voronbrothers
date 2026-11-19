@@ -166,10 +166,18 @@ func (d *Delegate) agentStatusLine(a *agentInfo) string {
 			// Сессия мертва и heartbeat затих — агент действительно убит.
 			return fmt.Sprintf("💀 DEAD (tmux session gone, no heartbeat %s; last: %s)", shortDur(st.age()), reasonOr(st, st.Status))
 		case !alive && finished:
-			// Задача завершилась, процесс уже вышел — это нормальный финал.
+			// Задача завершилась, но процесс мозга всё ещё жив — это зомби
+			//(осиротевший setsid-процесс без пейна), а не нормальный финал.
+			if orphanedLine(st) != "" {
+				return orphanedLine(st)
+			}
+			// Процесс вышел — это нормальный финал.
 			return st.humanStatus()
 		case !alive:
 			// Осиротевший, но живой bee: сессию убили, мозг продолжает работу.
+			if orphanedLine(st) != "" {
+				return orphanedLine(st)
+			}
 			return st.humanStatus() + " (tmux session gone — brain survived as a detached process)"
 		case !fresh:
 			return fmt.Sprintf("🛑 STALLED (no heartbeat %s; last: %s)", shortDur(st.age()), reasonOr(st, st.Status))
@@ -187,6 +195,16 @@ func (d *Delegate) agentStatusLine(a *agentInfo) string {
 	default:
 		return "▶ WORKING (no state file — heuristic)"
 	}
+}
+
+// orphanedLine — пометка для зомби-агента: tmux-пейна нет, а процесс мозга
+// (PID из state-файла) всё ещё жив. Такой агент heartbeat пишет, но задачи не
+// примет (некуда читать stdin), пока его явно не stopнуть.
+func orphanedLine(st beeStateSnapshot) string {
+	if st.PID <= 0 || procState(st.PID) == "" {
+		return ""
+	}
+	return fmt.Sprintf("⚠️ ORPHANED (tmux pane gone, brain pid %d still alive — stop it): %s", st.PID, st.humanStatus())
 }
 
 // reasonOr — reason из state-файла, либо запасной текст.
@@ -321,6 +339,8 @@ func agentWorkNote(a *agentInfo, statusLine string) string {
 	switch {
 	case strings.Contains(statusLine, "PAUSED"), strings.Contains(statusLine, "STALLED"):
 		return "\n⚠️ AGENT IS NOT PROGRESSING / АГЕНТ НЕ РАБОТАЕТ: " + statusLine
+	case strings.Contains(statusLine, "ORPHANED"):
+		return "\n⚠️ AGENT IS ORPHANED / АГЕНТ ОСИРОТЕЛ (жив без пейна, stop его): " + statusLine
 	case strings.Contains(statusLine, "WORKING"), strings.Contains(statusLine, "STARTING"):
 		return "\n⏳ AGENT IS STILL WORKING / АГЕНТ ЕЩЁ РАБОТАЕТ: " + statusLine
 	case strings.Contains(statusLine, "FINISHED"):

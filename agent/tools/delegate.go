@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ollama/ollama/agent"
@@ -54,10 +55,10 @@ func (d *Delegate) Name() string { return "delegate" }
 func (d *Delegate) Description() string {
 	return "Spawn and control sub-agents as separate live tmux processes. Actions: " +
 		"'spawn' starts an agent with a task; 'list' shows all agents with an explicit status " +
-		"(▶ WORKING / ✅ FINISHED / 🛑 STALLED / 💀 DEAD / ⏸ PAUSED); 'status' shows one agent's live state; " +
+		"(▶ WORKING / ✅ FINISHED / 🛑 STALLED / 💀 DEAD / ⚠️ ORPHANED / ⏸ PAUSED); 'status' shows one agent's live state; " +
 		"'models' lists available agent brains (cloud providers + local ollama); " +
 		"'output' reads the agent's terminal output (prefixed with its live status); " +
-		"'stop' kills one; 'feed' sends it a message (at start or mid-run); " +
+		"'stop' kills one (including orphaned brains by pid); 'feed' sends it a message (at start or mid-run); " +
 		"'pause'/'resume' freeze/unfreeze its process. " +
 		"Sub-agents have full freedom; you only monitor and steer. " +
 		"Always check 'list' or 'output' before assuming an agent is still busy — the status line is authoritative."
@@ -253,11 +254,22 @@ func (d *Delegate) stop(id string) (agent.ToolResult, error) {
 	tree := processTree(root)
 	out, _ := exec.Command("tmux", "kill-session", "-t", a.session).CombinedOutput()
 	killed := 0
+	inTree := map[int]bool{}
 	for _, pid := range tree {
 		if pid <= 0 || procState(pid) == "" {
 			continue // уже не жив (tmux убил вместе с пейном)
 		}
 		_ = exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
+		killed++
+		inTree[pid] = true
+	}
+	// Setsid-мозг может пережить смерть своего пейна (осиротевший процесс),
+	// тогда он не входит в дерево пейна. Берём его PID из state-файла и
+	// убиваем всю process group: мозг — session leader, значит -pid = всё дерево.
+	if st, ok := readBeeState(a.statePath); ok && st.PID > 0 && !inTree[st.PID] && procState(st.PID) != "" {
+		if err := syscall.Kill(-st.PID, syscall.SIGKILL); err != nil {
+			_ = syscall.Kill(st.PID, syscall.SIGKILL) // группа не нашлась — бьём по pid напрямую
+		}
 		killed++
 	}
 	d.mu.Lock()

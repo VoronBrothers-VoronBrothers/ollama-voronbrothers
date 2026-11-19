@@ -118,13 +118,45 @@ func TestAgentStatusLineFromStateFile(t *testing.T) {
 	}
 }
 
+// TestAgentStatusLineOrphaned — зомби-агент: пейна нет, а процесс мозга жив.
+// Такой агент должен показываться как ORPHANED, а не как нормальный FINISHED/WORKING.
+func TestAgentStatusLineOrphaned(t *testing.T) {
+	d := NewDelegate()
+	session := "bee-no-such-session-orphan-test"
+
+	// Живой PID: pid 1 всегда существует. Сессия мертва, задача «закончена», но мозг жив.
+	st := beeStateSnapshot{Status: "idle", Round: 2, Reason: "final answer", Waiting: true,
+		PID: 1, UpdatedAt: time.Now()}
+	info := &agentInfo{id: "o1", session: session, task: "x", spawnedAt: time.Now(),
+		statePath: writeState(t, session, st)}
+	if got := d.agentStatusLine(info); !strings.Contains(got, "ORPHANED") {
+		t.Fatalf("status = %q, want ORPHANED for live brain without pane", got)
+	}
+
+	// Мёртвый PID (больше дефолтного pid_max) → это нормальный финал, не зомби.
+	st.PID = 4194307
+	info.statePath = writeState(t, session, st)
+	if got := d.agentStatusLine(info); strings.Contains(got, "ORPHANED") || !strings.Contains(got, "FINISHED") {
+		t.Fatalf("status = %q, want plain FINISHED for dead brain", got)
+	}
+
+	// Работающий мозг без пейна тоже зомби.
+	st.PID = 1
+	st.Status = "working"
+	info.statePath = writeState(t, session, st)
+	if got := d.agentStatusLine(info); !strings.Contains(got, "ORPHANED") {
+		t.Fatalf("status = %q, want ORPHANED for live working brain without pane", got)
+	}
+}
+
 // TestAgentWorkNote — однозначная приписка для основной модели.
 func TestAgentWorkNote(t *testing.T) {
 	cases := map[string]string{
-		"▶ WORKING (round 1)":    "STILL WORKING",
-		"✅ FINISHED (task done)": "HAS FINISHED",
-		"💀 DEAD (tmux gone)":     "NOT RUNNING",
-		"🛑 STALLED (no hb 90s)":  "NOT PROGRESSING",
+		"▶ WORKING (round 1)":                      "STILL WORKING",
+		"✅ FINISHED (task done)":                   "HAS FINISHED",
+		"💀 DEAD (tmux gone)":                       "NOT RUNNING",
+		"🛑 STALLED (no hb 90s)":                    "NOT PROGRESSING",
+		"⚠️ ORPHANED (... pid 42 ...): ✅ FINISHED": "ORPHANED",
 	}
 	for status, want := range cases {
 		note := agentWorkNote(&agentInfo{}, status)
