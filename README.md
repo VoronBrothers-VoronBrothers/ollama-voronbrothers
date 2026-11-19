@@ -145,6 +145,8 @@ ollama stop; ollama tui lama 'ты продолжаешь задачу, конт
 | `❌ FAILED: http 500 …` | ошибка модели или фатальный сбой |
 | `⛔ STOPPED: max rounds (300) reached` | кончился бюджет раундов |
 | `⏸ PAUSED (frozen N pid)` | заморожен через `delegate pause` |
+| `⚠️ ORPHANED (tmux pane gone, brain pid N still alive — stop it)` | tmux-пейн умер, а «мозг» (PID из state-файла) живёт как отцепленный процесс: heartbeat пишет, но задачу не примет, пока его явно `stop`нуть |
+| `👻 GHOST (no state file, tmux gone, brain pid N alive — stop it)` | ни state-файла, ни сессии в tmux — а живой «мозг» найден сканом `/proc` по env; виден только после ghost sweep
 
 `output` дополнительно приписывает однозначную строку для основной модели:
 `⏳ AGENT IS STILL WORKING` / `✅ AGENT HAS FINISHED` / `❌ AGENT IS NOT RUNNING`.
@@ -162,6 +164,39 @@ ollama stop; ollama tui lama 'ты продолжаешь задачу, конт
    `pkill -f tmux`, `kill 0`, `killall bash` внутри `run_command` сносили сервер
    вместе со всеми сессиями. Такие команды теперь отклоняются с объяснением
    (см. `bee/guard.go`).
+
+#### Ghost sweep и session-wide stop: невидимые «мозги» больше не выживают
+
+«Мозг» под-агента (`bee`) запускается в собственной process session
+(`setsid`), поэтому смерть tmux-сессии, крах tmux-сервера или перезагрузка
+**не убивают его**: state-файл стёрт, сессия исчезла из `tmux list`, а процесс
+продолжает работать «невидимо». Раньше такой агент показывался ложным
+`💀 DEAD`, а `stop` не находил чего убить (0 процессов) — мозг выживал.
+
+**Ghost sweep** (`delegate_ghost.go`). Источник истины — не tmux list и не
+state-файлы, а процессы в памяти: `findGhosts()` сканирует `/proc/<pid>/environ`
+и находит живые мозги по env `BEE_STATE`/`BEE_SESSION`, которые мы экспортируем
+при spawn. Найденных агентов `sweepGhosts()` **adopt'ит в реестр** этой сессии:
+после этого они видны в `list` со статусной строкой (`⚠️ ORPHANED` / `👻 GHOST`),
+a `stop`/`feed` работают по id. Sweep ещё и **backfill'ит `brainPid`** для
+агентов, которые создал сам `spawn()` этой сессии (раньше у них pid мозга не был
+записан — ghost без state-файла оставался невидимым: ложный `DEAD`, `stop`
+убивал 0).
+
+**Session-wide stop** (`delegate.go::stop`). Ключевая ловушка: `tmux kill-session`
+шлёт сигналы **только прямым детям** пейна, а setsid-мозг и его дети живут в
+чужой session и выживают как сироты. Поэтому `stop`:
+1. снимает дерево процессов **до** убийства сессии (корень = pid пейна);
+2. явно убивает это дерево (`kill -9` по каждому живому, не-zombie);
+3. находит pid «мозга» (из state-файла или backfilled `brainPid`) и бьёт
+   сначала по всей его process group (`kill -9 -pid`), а если мозг — настоящий
+   **session leader** (`sess == pid` из `/proc/<pid>/stat`) — дополнительно
+   добивает все pids этой session: дети `run_command` могут жить в собственных
+   пgrp внутри той же session и пережить `-pid`. Убьём чужую сессию мы не
+   зацепим (она leader'а не своего).
+
+Живость процесса проверяет `procAlive()` — zombie-safe: zombie (`Z`) уже мёртв,
+просто не собран репетитором, и считается мёртвым.
 
 ### TUI: перманентный индикатор "Working"
 
