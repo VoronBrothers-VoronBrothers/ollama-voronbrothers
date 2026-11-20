@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/cmd/config"
 	"github.com/ollama/ollama/internal/modelref"
 )
 
@@ -30,6 +32,9 @@ type Session struct {
 	ApprovalState    *ApprovalState
 	WorkingDir       string
 	Compactor        Compactor
+
+dialogMu     sync.Mutex
+	dialogLog    *dialogLogger // continuous JSONL log of every message (predsave feature)
 }
 
 type RunOptions struct {
@@ -187,6 +192,12 @@ func (s *Session) Run(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		phase:         runPhaseModel,
 		messages:      messages,
 		maxToolRounds: resolvedMaxToolRounds(opts.Model, opts.MaxToolRounds),
+	}
+
+	// Continuous dialog log: record every message before it can be replaced by
+	// compaction, so at any pre-compaction moment the full dialog is on disk.
+	if dl := s.ensureDialogLog(); dl != nil {
+		dl.Append(st.messages)
 	}
 	for {
 		switch st.phase {
@@ -727,6 +738,26 @@ func isContextCanceledError(ctx context.Context, err error) bool {
 		return true
 	}
 	return ctx != nil && errors.Is(ctx.Err(), context.Canceled) && strings.Contains(err.Error(), "context canceled")
+}
+
+// ensureDialogLog lazily creates the continuous JSONL dialog log for this
+// session, gated by the global /predsave-compaction toggle.
+func (s *Session) ensureDialogLog() *dialogLogger {
+	s.dialogMu.Lock()
+	defer s.dialogMu.Unlock()
+	if s.dialogLog != nil {
+		return s.dialogLog
+	}
+	if !config.PredsaveCompactionEnabled() {
+		return nil
+	}
+	dl, err := newDialogLogger()
+	if err != nil {
+		slog.Debug("dialog log: create failed", "err", err)
+		return nil
+	}
+	s.dialogLog = dl
+	return s.dialogLog
 }
 
 func (s *Session) maybeCompact(ctx context.Context, runID string, opts RunOptions, messages []api.Message, latest api.ChatResponse, keepLastCount int, skipNotified bool) ([]api.Message, bool, error) {
