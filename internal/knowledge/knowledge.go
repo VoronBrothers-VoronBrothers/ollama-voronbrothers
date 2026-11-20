@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -47,6 +48,18 @@ const (
 	// definition paragraph) fits in one chunk without being diluted by a TOC
 	// or adjacent content. Overlap scales at ~10% (see ChunkOverlapWords).
 	ChunkSizeWords = 250
+)
+
+const (
+	// RecencyBoost is how many BM25-score units a brand-new file's effective
+	// score is pushed down (better) by recency, before decay. Higher means
+	// dates matter more relative to raw relevance. Kept modest so an unrelated
+	// fresh doc doesn't leapfrog the genuinely best match.
+	RecencyBoost = 3.0
+
+	// RecencyHalfLife is the age at which a file's recency boost decays to half.
+	// ~6 months: recent notes get a real lift, old ones fall back to pure BM25.
+	RecencyHalfLife = 180 * 24 * time.Hour
 )
 
 // Dir returns the absolute path to the knowledge directory, creating it if needed.

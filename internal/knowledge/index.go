@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -27,7 +29,8 @@ CREATE TABLE IF NOT EXISTS chunks (
 	path    TEXT NOT NULL,
 	offset  INTEGER NOT NULL,
 	heading TEXT NOT NULL DEFAULT '',
-	content TEXT NOT NULL
+	content TEXT NOT NULL,
+	mtime   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
@@ -50,7 +53,8 @@ type Store struct {
 // Result is one search hit with its source file and byte offset.
 type Result struct {
 	Chunk
-	Score float64 // BM25 score, lower (more negative) = better match
+	MTime time.Time // source file modification time (zero if unknown)
+	Score float64   // BM25 score, lower (more negative) = better match
 }
 
 // Status summarises the index for UI display (TUI menu).
@@ -61,39 +65,54 @@ type Status struct {
 	Stale     bool
 }
 
-// migrate upgrades in-place indexes built by older versions: it adds the
-// heading column to chunks and recreates the FTS table with the weighted
-// (heading, content) columns.
+// migrate upgrades in-place indexes built by older versions. It ensures every
+// column this version needs exists on chunks (idempotent). Adding the heading
+// column requires recreating the external-content FTS table; mtime does not,
+// since it is never part of the FTS index.
 func migrate(conn *sql.DB) error {
-	var count int
-	if err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name = 'heading'").Scan(&count); err != nil {
+	var hasHeading, hasMTime int
+	if err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name = 'heading'").Scan(&hasHeading); err != nil {
 		return fmt.Errorf("inspect chunks schema: %w", err)
 	}
-	if count > 0 {
-		return nil // already on the new schema
+	if err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name = 'mtime'").Scan(&hasMTime); err != nil {
+		return fmt.Errorf("inspect mtime column: %w", err)
+	}
+	if hasHeading > 0 && hasMTime > 0 {
+		return nil // already on the current schema
 	}
 	x, err := conn.Begin()
 	if err != nil {
 		return err
 	}
 	defer x.Rollback()
-	if _, err := x.Exec("ALTER TABLE chunks ADD COLUMN heading TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("add heading column: %w", err)
+	addedHeading := false
+	if hasHeading == 0 {
+		if _, err := x.Exec("ALTER TABLE chunks ADD COLUMN heading TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("add heading column: %w", err)
+		}
+		addedHeading = true
 	}
-	// External-content FTS table cannot change columns in place: recreate it.
-	if _, err := x.Exec("DROP TABLE IF EXISTS chunks_fts"); err != nil {
-		return fmt.Errorf("drop old fts table: %w", err)
+	if hasMTime == 0 {
+		if _, err := x.Exec("ALTER TABLE chunks ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("add mtime column: %w", err)
+		}
 	}
-	ftsSchema := `CREATE VIRTUAL TABLE chunks_fts USING fts5(
-		heading, content,
-		content='chunks', content_rowid='id',
-		tokenize='porter unicode61'
-	)`
-	if _, err := x.Exec(ftsSchema); err != nil {
-		return fmt.Errorf("recreate fts table: %w", err)
-	}
-	if _, err := x.Exec(`INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')`); err != nil {
-		return fmt.Errorf("rebuild fts after migration: %w", err)
+	if addedHeading {
+		// External-content FTS table cannot change columns in place: recreate it.
+		if _, err := x.Exec("DROP TABLE IF EXISTS chunks_fts"); err != nil {
+			return fmt.Errorf("drop old fts table: %w", err)
+		}
+		ftsSchema := `CREATE VIRTUAL TABLE chunks_fts USING fts5(
+			heading, content,
+			content='chunks', content_rowid='id',
+			tokenize='porter unicode61'
+		)`
+		if _, err := x.Exec(ftsSchema); err != nil {
+			return fmt.Errorf("recreate fts table: %w", err)
+		}
+		if _, err := x.Exec(`INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')`); err != nil {
+			return fmt.Errorf("rebuild fts after migration: %w", err)
+		}
 	}
 	return x.Commit()
 }
@@ -215,7 +234,7 @@ func Index(dir string) (*Status, error) {
 	if _, err := tx.Exec("DELETE FROM chunks"); err != nil {
 		return rollback(fmt.Errorf("clear chunks: %w", err))
 	}
-	insertChunk, err := tx.Prepare("INSERT INTO chunks (path, offset, heading, content) VALUES (?, ?, ?, ?)")
+	insertChunk, err := tx.Prepare("INSERT INTO chunks (path, offset, heading, content, mtime) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		return rollback(err)
 	}
@@ -228,8 +247,12 @@ func Index(dir string) (*Status, error) {
 			continue // unreadable file: skip, keep indexing the rest
 		}
 		rel, _ := filepath.Rel(dir, f)
+		var mt time.Time // source file modification time; drives recency ranking
+		if st, e := os.Stat(f); e == nil {
+			mt = st.ModTime()
+		}
 		for _, c := range chunkText(text, ChunkSizeWords) {
-			if _, err := insertChunk.Exec(rel, c.Offset, c.Heading, c.Content); err != nil {
+			if _, err := insertChunk.Exec(rel, c.Offset, c.Heading, c.Content, mt.Unix()); err != nil {
 				return rollback(fmt.Errorf("insert chunk for %s: %w", rel, err))
 			}
 			chunksTotal++
@@ -281,12 +304,18 @@ func Search(dir string, query string, k int) ([]Result, error) {
 	defer s.Close()
 
 	match := strings.Join(tokens, " OR ")
+	// Pull a candidate pool larger than the final k so recency re-ranking can
+	// promote newer chunks that BM25 alone would have just missed the cut.
+	candK := k * 8
+	if candK < 16 {
+		candK = 16
+	}
 	rows, err := s.conn.Query(
-		`SELECT c.path, c.offset, c.heading, c.content,
+		`SELECT c.path, c.offset, c.heading, c.content, c.mtime,
 		        bm25(chunks_fts, 3.0, 1.0) AS score
 		 FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
 		 WHERE chunks_fts MATCH ?
-		 ORDER BY score LIMIT ?`, match, k)
+		 ORDER BY score LIMIT ?`, match, candK)
 	if err != nil {
 		return nil, fmt.Errorf("fts query: %w", err)
 	}
@@ -295,12 +324,43 @@ func Search(dir string, query string, k int) ([]Result, error) {
 	var out []Result
 	for rows.Next() {
 		var r Result
-		if err := rows.Scan(&r.Path, &r.Offset, &r.Heading, &r.Content, &r.Score); err != nil {
+		var mt int64
+		if err := rows.Scan(&r.Path, &r.Offset, &r.Heading, &r.Content, &mt, &r.Score); err != nil {
 			return nil, fmt.Errorf("scan fts row: %w", err)
 		}
+		r.MTime = time.Unix(mt, 0)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Re-rank: boost newer files (lower key = ranked first), then trim to k.
+	now := time.Now()
+	sort.SliceStable(out, func(i, j int) bool {
+		return recencySortKey(out[i].Score, out[i].MTime, now) < recencySortKey(out[j].Score, out[j].MTime, now)
+	})
+	if len(out) > k {
+		out = out[:k]
+	}
+	return out, nil
+}
+
+// recencySortKey returns the ranking key for a search hit: lower is ranked
+// first. BM25 scores are negative (more negative = better match). A newer file
+// gets its score pushed further down by an exponential decay boost, so that —
+// when two chunks are close on relevance — the more recently updated one wins.
+// For very old files (or unknown mtime) the boost is ~0 and raw BM25 holds.
+func recencySortKey(bm25 float64, mtime time.Time, now time.Time) float64 {
+	if mtime.IsZero() {
+		return bm25 // no date info: neutral, pure relevance
+	}
+	age := now.Sub(mtime)
+	if age < 0 {
+		age = 0
+	}
+	decay := math.Exp(-age.Hours() / RecencyHalfLife.Hours()) // 1 (new) → ~0 (old)
+	return bm25 - RecencyBoost*decay
 }
 
 // ftsTokens turns a free-text query into FTS5 match syntax: one prefix-matched
@@ -360,6 +420,13 @@ func IndexStatus(dir string) (*Status, error) {
 	var ts string
 	if err := s.conn.QueryRow(`SELECT value FROM meta WHERE key='indexed_at'`).Scan(&ts); err == nil {
 		st.IndexedAt, _ = time.Parse(time.RFC3339, ts)
+	}
+
+	// Self-heal: an index built before per-file dates were stored has all-zero
+	// mtime. Flag it stale so the next search reindexes once to populate them.
+	var zeroMTime int
+	if err := s.conn.QueryRow(`SELECT COUNT(*) FROM chunks WHERE mtime = 0`).Scan(&zeroMTime); err == nil && zeroMTime > 0 {
+		st.Stale = true
 	}
 
 	for _, f := range files {

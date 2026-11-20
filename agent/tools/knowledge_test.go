@@ -69,13 +69,14 @@ func TestKnowledgeSearchFindsContentAndReindexes(t *testing.T) {
 	}
 
 	// New output format must give the agent an absolute path plus a 1-based
-	// line range so it can fetch more directly with the read tool.
+	// line range so it can fetch more directly with the read tool, and surface
+	// the file's update date so the model can judge staleness.
 	abs := filepath.Join(dir, "notes.md")
 	if !strings.Contains(out, abs) {
 		t.Fatalf("want absolute source path %q in output, got:\n%s", abs, out)
 	}
-	if !strings.Contains(out, "(lines ") || !strings.Contains(out, ") ---\n") {
-		t.Fatalf("want 'lines N-M' range marker in output, got:\n%s", out)
+	if !strings.Contains(out, "(lines ") || !strings.Contains(out, "updated ") {
+		t.Fatalf("want 'lines N-M' range marker and update date in output, got:\n%s", out)
 	}
 
 	// New file appears on disk: next search must transparently reindex and find it.

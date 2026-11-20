@@ -123,7 +123,11 @@ func searchKnowledge(dir string, query string) (content string, note string, err
 		if r.Heading != "" {
 			heading = " § " + r.Heading
 		}
-		fmt.Fprintf(&b, "--- Source: %s%s (lines %d-%d) ---\n%s", abs, heading, startL, endL, r.Content)
+		dateStr := ""
+		if !r.MTime.IsZero() {
+			dateStr = " · updated " + r.MTime.Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(&b, "--- Source: %s%s (lines %d-%d)%s ---\n%s", abs, heading, startL, endL, dateStr, r.Content)
 		kept++
 	}
 	head := fmt.Sprintf("Found %d relevant fragment(s):\n\n", kept)

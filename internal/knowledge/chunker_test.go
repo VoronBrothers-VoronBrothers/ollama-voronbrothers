@@ -123,16 +123,18 @@ func TestIndexAndSearchRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "alpha.md"), "# Ollama notes\n\nOllama is a local model runner with an HTTP API.\n")
 	writeFile(t, filepath.Join(dir, "beta.txt"), "The weather in Voronezh today is rainy and cold.\n")
-	// unsupported + hidden files must be ignored
+	// .pdf IS a supported extension: it's collected (counted as a file) but the
+	// fake PDF has no text layer, so pdftotext yields nothing → 0 chunks.
 	writeFile(t, filepath.Join(dir, "skip.pdf"), "%PDF fake\n")
+	// hidden files must be ignored
 	writeFile(t, filepath.Join(dir, ".hidden.md"), "secret content\n")
 
 	st, err := Index(dir)
 	if err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	if st.Files != 2 || st.Chunks < 2 {
-		t.Fatalf("want 2 files indexed with chunks, got %+v", st)
+	if st.Files != 3 || st.Chunks < 2 {
+		t.Fatalf("want 3 files (md+txt+pdf) with chunks from the two text files, got %+v", st)
 	}
 
 	res, err := Search(dir, "local model runner API", 3)
