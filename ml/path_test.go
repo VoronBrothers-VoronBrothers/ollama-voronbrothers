@@ -114,3 +114,36 @@ func TestFindLibOllamaPath(t *testing.T) {
 		})
 	}
 }
+
+func TestFindLibOllamaPathOverride(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("explicit absolute override wins", func(t *testing.T) {
+		override := filepath.Join(root, "custom-llama")
+		if err := os.MkdirAll(override, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("OLLAMA_WHERE_IS_MY_LLAMA_CPP", override)
+
+		search := libOllamaPathSearch{executable: filepath.Join(root, "x", "ollama"), goos: "linux", goarch: "amd64"}
+		if got := findLibOllamaPath(search); got != override {
+			t.Fatalf("findLibOllamaPath() = %q, want override %q; candidates: %v", got, override, libOllamaPathCandidates(search))
+		}
+	})
+
+	t.Run("relative path is ignored and auto-detection applies", func(t *testing.T) {
+		dir := filepath.Join(root, "rel-install", "lib", "ollama")
+		exe := filepath.Join(root, "rel-install", "bin", "ollama")
+		for _, d := range []string{dir, filepath.Dir(exe)} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		search := libOllamaPathSearch{executable: exe, goos: "linux", goarch: "amd64"}
+
+		t.Setenv("OLLAMA_WHERE_IS_MY_LLAMA_CPP", "relative/lib/ollama")
+		if got := findLibOllamaPath(search); got != dir {
+			t.Fatalf("findLibOllamaPath() = %q, want auto-detected %q; candidates: %v", got, dir, libOllamaPathCandidates(search))
+		}
+	})
+}

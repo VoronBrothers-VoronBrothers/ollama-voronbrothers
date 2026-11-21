@@ -103,6 +103,11 @@ const envFileTemplate = `# =====================================================
 # Force a specific llama.cpp build instead of autodetection.
 # OLLAMA_LLM_LIBRARY=
 
+# Active llama.cpp build directory (llama-server + ggml backends). Point this at
+# a new build to switch engines quickly without rebuilding ollama.
+# Default: /usr/local/lib/ollama
+# OLLAMA_WHERE_IS_MY_LLAMA_CPP=/usr/local/lib/ollama
+
 # Restrict visible GPUs (CUDA / ROCm / Vulkan / AMD ordinal).
 # CUDA_VISIBLE_DEVICES=0
 # HIP_VISIBLE_DEVICES=0

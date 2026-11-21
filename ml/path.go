@@ -1,9 +1,12 @@
 package ml
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/ollama/ollama/envconfig"
 )
 
 type libOllamaPathSearch struct {
@@ -72,6 +75,22 @@ func libOllamaPathCandidates(search libOllamaPathSearch) []string {
 		if !seen[path] {
 			seen[path] = true
 			candidates = append(candidates, path)
+		}
+	}
+
+	// Highest priority: OLLAMA_WHERE_IS_MY_LLAMA_CPP, only when explicitly set.
+	// Lets builds be swapped quickly without rebuilding ollama; the existence
+	// check below skips it if the directory is absent. When unset, normal
+	// auto-detection (which already finds /usr/local/lib/ollama on a standard
+	// install) continues to apply.
+	if p := envconfig.Var("OLLAMA_WHERE_IS_MY_LLAMA_CPP"); p != "" {
+		if !filepath.IsAbs(p) {
+			slog.Warn("OLLAMA_WHERE_IS_MY_LLAMA_CPP must be an absolute path, ignoring", "path", p)
+		} else {
+			if _, err := os.Stat(p); err != nil {
+				slog.Warn("OLLAMA_WHERE_IS_MY_LLAMA_CPP set but directory not found; falling back to auto-detection", "path", p)
+			}
+			add(p)
 		}
 	}
 
