@@ -34,7 +34,7 @@ type Session struct {
 	Compactor        Compactor
 
 dialogMu     sync.Mutex
-	dialogLog    *dialogLogger // continuous JSONL log of every message (predsave feature)
+	dialogLog    *dialogLogger // continuous JSONL log of every message (debug-dialog feature)
 }
 
 type RunOptions struct {
@@ -741,14 +741,15 @@ func isContextCanceledError(ctx context.Context, err error) bool {
 }
 
 // ensureDialogLog lazily creates the continuous JSONL dialog log for this
-// session, gated by the global /predsave-compaction toggle.
+// session, gated by the global /debug-dialog toggle (default off;
+// independent from /predsave-compaction).
 func (s *Session) ensureDialogLog() *dialogLogger {
 	s.dialogMu.Lock()
 	defer s.dialogMu.Unlock()
 	if s.dialogLog != nil {
 		return s.dialogLog
 	}
-	if !config.PredsaveCompactionEnabled() {
+	if !config.DebugDialogEnabled() {
 		return nil
 	}
 	dl, err := newDialogLogger()

@@ -73,24 +73,42 @@ func TestDialogLogger_CloseThenAppend(t *testing.T) {
 
 func TestEnsureDialogLog_GatedByToggle(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := config.SetPredsaveCompaction(false); err != nil {
-		t.Fatalf("SetPredsaveCompaction: %v", err)
-	}
-	s := &Session{}
-	if dl := s.ensureDialogLog(); dl != nil {
-		t.Fatal("выключенный пресейв не должен создавать лог диалога")
+
+	// По умолчанию журнал выключен — лог не создаётся (даже если пресейв включён).
+	if err := config.SetDebugDialog(false); err != nil {
+		t.Fatalf("SetDebugDialog: %v", err)
 	}
 	if err := config.SetPredsaveCompaction(true); err != nil {
 		t.Fatalf("SetPredsaveCompaction: %v", err)
 	}
+	s := &Session{}
+	if dl := s.ensureDialogLog(); dl != nil {
+		t.Fatal("выключенный debug-dialog не должен создавать лог диалога")
+	}
+
+	// Включаем debug-dialog — лог создаётся (пресейв на это не влияет).
+	if err := config.SetDebugDialog(true); err != nil {
+		t.Fatalf("SetDebugDialog: %v", err)
+	}
 	s = &Session{}
 	dl := s.ensureDialogLog()
 	if dl == nil {
-		t.Fatal("включённый пресейв должен создать лог диалога")
+		t.Fatal("включённый debug-dialog должен создать лог диалога")
 	}
 	defer dl.Close()
 	// Повторный вызов возвращает тот же логер.
 	if s.ensureDialogLog() != dl {
 		t.Fatal("ensureDialogLog не идемпотентен")
 	}
+
+	// Независимость от пресейва: выключили предсохранение — лог уже создан и живёт дальше.
+	if err := config.SetPredsaveCompaction(false); err != nil {
+		t.Fatalf("SetPredsaveCompaction: %v", err)
+	}
+	s2 := &Session{}
+	dl2 := s2.ensureDialogLog()
+	if dl2 == nil {
+		t.Fatal("debug-dialog не должен зависеть от пресейва")
+	}
+	defer dl2.Close()
 }

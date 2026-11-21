@@ -73,6 +73,7 @@ var chatSlashCommands = []chatSlashCommand{
 	{name: "/ping-pong-off", description: "stop Ping-Pong only (heartbeat stays untouched)", aliases: []string{"/пинг-понг-off"}},
 	{name: "/zip", usage: "/zip [on|off]", description: "toggle automatic context compaction (default on)", aliases: []string{"/зип"}},
 	{name: "/predsave-compaction", usage: "/predsave-compaction [on|off]", description: "globally toggle dialog JSON auto-save before compaction (default on; persisted in ~/.ollama/config.json)"},
+	{name: "/debug-dialog", usage: "/debug-dialog [on|off]", description: "globally toggle continuous dialog JSONL log chat-*-dialog.jsonl (default off; independent from /predsave-compaction)", aliases: []string{"/дебаг-диалог"}},
 	{name: "/token", description: "show stop reason and token counts under replies (toggle)", aliases: []string{"/токен"}},
 	{name: "/fullthink", description: "show/hide full thinking details (toggle)", aliases: []string{"/фуллмысль"}},
 	{name: "/save", usage: "/save [filename|path]", description: "save request JSON to ~/.ollama/chats (or explicit path)"},
@@ -340,6 +341,8 @@ func (m *chatModel) submitInput(input string) (tea.Model, tea.Cmd) {
 		return m.startManualCompaction()
 	case command == "/predsave-compaction":
 		return m.handlePredsaveCompactionCommand(args)
+	case command == "/debug-dialog" || command == "/дебаг-диалог":
+		return m.handleDebugDialogCommand(args)
 	case skillOK:
 		return m.startSkillRun(skillName, skillPrompt)
 	case strings.HasPrefix(input, "/") && m.slashInputIsMultimodalFile(input):

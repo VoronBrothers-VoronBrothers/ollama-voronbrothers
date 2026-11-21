@@ -105,6 +105,32 @@ func (m *chatModel) handlePredsaveCompactionCommand(args string) (tea.Model, tea
 	return *m, nil
 }
 
+// handleDebugDialogCommand — глобальный тумблер: непрерывный журнал диалога
+// chat-<ts>-dialog.jsonl (вкл/выкл, персистентно в ~/.ollama/config.json).
+// Независим от /predsave-compaction.
+func (m *chatModel) handleDebugDialogCommand(args string) (tea.Model, tea.Cmd) {
+	var enabled bool
+	switch strings.ToLower(strings.TrimSpace(args)) {
+	case "":
+		enabled = !config.DebugDialogEnabled()
+	case "on", "true", "вкл", "включить":
+		enabled = true
+	case "off", "false", "выкл", "выключить":
+		enabled = false
+	default:
+		return m.addDebugError(fmt.Errorf("usage: /debug-dialog [on|off]"))
+	}
+	if err := config.SetDebugDialog(enabled); err != nil {
+		return m.addDebugError(err)
+	}
+	state := "включено"
+	if !enabled {
+		state = "выключено"
+	}
+	m.entries = append(m.entries, newSlashEntry("журнал диалога (chat-*-dialog.jsonl): "+state+" (глобально, ~/.ollama/config.json)"))
+	return *m, nil
+}
+
 func (m *chatModel) handlePromptCommand(args string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(args) != "" {
 		return m.addDebugError(fmt.Errorf("usage: /prompt"))

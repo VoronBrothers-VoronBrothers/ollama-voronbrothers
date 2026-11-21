@@ -35,6 +35,10 @@ type config struct {
 	// PredsaveCompaction — глобальный тумблер: сохранять JSON диалога перед
 	// компакцией (по умолчанию вкл.; nil = не задано = true).
 	PredsaveCompaction *bool `json:"predsave_compaction,omitempty"`
+	// DebugDialog — глобальный тумблер: непрерывный журнал диалога
+	// ~/.ollama/chats/chat-<ts>-dialog.jsonl (по умолчанию выкл.;
+	// nil = не задано = false). Независим от PredsaveCompaction.
+	DebugDialog *bool `json:"debug_dialog,omitempty"`
 }
 
 func NeedsWelcome() (bool, error) {
@@ -331,6 +335,27 @@ func SetPredsaveCompaction(enabled bool) error {
 	}
 	v := enabled
 	cfg.PredsaveCompaction = &v
+	return save(cfg)
+}
+
+// DebugDialogEnabled reports whether the continuous dialog JSONL log is
+// enabled. Unset (legacy config) means OFF.
+func DebugDialogEnabled() bool {
+	cfg, err := load()
+	if err != nil {
+		return false
+	}
+	return cfg.DebugDialog != nil && *cfg.DebugDialog
+}
+
+// SetDebugDialog persists the global continuous dialog log toggle.
+func SetDebugDialog(enabled bool) error {
+	cfg, err := load()
+	if err != nil {
+		return err
+	}
+	v := enabled
+	cfg.DebugDialog = &v
 	return save(cfg)
 }
 
