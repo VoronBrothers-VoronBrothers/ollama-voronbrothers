@@ -36,6 +36,8 @@ var (
 const doneMarker = "[bee] DONE {end}"
 
 func emitDone(reason string) {
+	// Каждый DONE = сохранение полной истории (final answer / error / max rounds).
+	beeSave.writeSnapshot(flagModel, getBeeState().Task)
 	if reason == "" {
 		fmt.Println(doneMarker)
 	} else {
@@ -68,6 +70,8 @@ func main() {
 			s.Phase = "exited"
 			s.Waiting = false
 		})
+		// Финальный снапшот полной истории при выходе процесса.
+		beeSave.writeSnapshot(flagModel, getBeeState().Task)
 	}()
 
 	ep := resolveEndpoint(flagModel)
@@ -176,6 +180,7 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 				continue
 			}
 			corrections++
+			beeSave.noteCorrection(p)
 			fmt.Printf("USER (correction): %s\n", p)
 			messages = append(messages, chatMsg{Role: "user", Content: "Correction from supervisor (apply it): " + p})
 		}
@@ -213,6 +218,7 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 		}
 
 		if len(resp.toolCalls) == 0 {
+			beeSave.setFinalAnswer(resp.message.Content)
 			fmt.Printf("\nAI: %s\n", strings.TrimSpace(resp.message.Content))
 			updateState(func(s *beeState) {
 				s.Status = statusIdle
@@ -275,9 +281,9 @@ func dispatchTool(sh *shell, name string, args map[string]any) string {
 		result = runCommand(sh, args)
 	}
 
-	// Периодический save: каждые N вызовов любого tool → JSON-файл.
-	argsBrief := firstLine(argsToString(args))
-	if beeSave.recordToolCall(name, argsBrief, len(result)) {
+	// Периодический save: полная история, чекпоинт каждые N вызовов.
+	fullArgs, _ := json.Marshal(args)
+	if beeSave.recordToolCall(name, string(fullArgs), result) {
 		beeSave.writeSnapshot(flagModel, getBeeState().Task)
 	}
 	return result
@@ -338,16 +344,6 @@ func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 160 {
 		s = s[:160] + "…"
-	}
-	return s
-}
-
-// argsToString — компактная строка аргументов tool-вызова (для save-снапшота).
-func argsToString(args map[string]any) string {
-	b, _ := json.Marshal(args)
-	s := string(b)
-	if len(s) > 200 {
-		s = s[:200] + "…"
 	}
 	return s
 }
@@ -549,8 +545,12 @@ type chatMsg struct {
 func systemPrompt() string {
 	return "You are a focused sub-agent with tools: run_command (persistent bash, cwd persists; optional timeout 60-900s, default 120s), read (file text; optional start/end lines), write (create/overwrite file), edit (exact old→new replacement). Relative paths use the shell's cwd. Prefer read/write/edit over cat/sed/echo.\n" +
 		"Long jobs (builds, big downloads, tests) are fine: pass timeout up to 900 seconds instead of splitting the work or polling. The call returns as soon as the command finishes — the timeout is only an upper bound.\n" +
-		"Be economical: minimize tool calls. Don't re-read files you've already seen. Batch independent operations in one command where possible. If 2-3 searches clarify the task, stop searching and act. Keep responses short — no preamble, no restating the task. When done, reply with a concise final summary (~20 lines) and stop calling tools." +
-		"Work step by step; prefer small verifiable actions."
+		"Efficiency protocol — follow strictly:\n" +
+		"- Plan in one breath, then act. A typical task takes 3-8 tool calls; any call beyond that must be justified by a concrete missing fact you can name before calling.\n" +
+		"- Measure each fact ONCE. Never re-run a command (or a variant of it) just to double-check its result. If two independent measurements disagree, report the most conservative number with a one-line note — do NOT iterate until they match.\n" +
+		"- No verification passes: after collecting the required data, go straight to the final answer. Re-scanning 'to be sure' is forbidden; a clean result from a correct command IS verified.\n" +
+		"- Batch independent operations into one command where possible; don't re-read files you've already seen. If 2-3 searches clarify the task, stop searching and act.\n" +
+		"Keep responses short — no preamble, no restating the task. When done, reply with a concise final summary (<=20 lines) and stop calling tools."
 }
 
 // reasoningTools400 — известный казус прокси (gpt-6-luna): /v1/chat/completions с
