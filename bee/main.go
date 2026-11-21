@@ -257,17 +257,30 @@ func runTask(client *http.Client, ep endpoint, shell *shell, corrCh <-chan strin
 
 // dispatchTool — разветвление tool-вызовов: run_command идёт в персистентный
 // bash, read/write/edit работают с файлами напрямую (без round-trip через shell).
+// Каждый вызов регистрируется в saveState (каждые N → JSON-снапшот).
 func dispatchTool(sh *shell, name string, args map[string]any) string {
+	var result string
 	switch name {
 	case "read":
-		return toolRead(sh, args)
+		result = toolRead(sh, args)
 	case "write":
-		return toolWrite(sh, args)
+		result = toolWrite(sh, args)
 	case "edit":
-		return toolEdit(sh, args)
+		result = toolEdit(sh, args)
 	default:
-		return runCommand(sh, args)
+		// run_command: пишем в историю ДО исполнения.
+		if cmd, ok := args["command"].(string); ok && cmd != "" {
+			appendHistory(cmd)
+		}
+		result = runCommand(sh, args)
 	}
+
+	// Периодический save: каждые N вызовов любого tool → JSON-файл.
+	argsBrief := firstLine(argsToString(args))
+	if beeSave.recordToolCall(name, argsBrief, len(result)) {
+		beeSave.writeSnapshot(flagModel, getBeeState().Task)
+	}
+	return result
 }
 
 // lastRunAt — время старта предыдущего run_command (для строки «Since last …»).
@@ -325,6 +338,16 @@ func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 160 {
 		s = s[:160] + "…"
+	}
+	return s
+}
+
+// argsToString — компактная строка аргументов tool-вызова (для save-снапшота).
+func argsToString(args map[string]any) string {
+	b, _ := json.Marshal(args)
+	s := string(b)
+	if len(s) > 200 {
+		s = s[:200] + "…"
 	}
 	return s
 }

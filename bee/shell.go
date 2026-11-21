@@ -42,6 +42,11 @@ type shell struct {
 func newShell() *shell {
 	s := &shell{}
 	s.start()
+	// Source профиль (rc.sh + aliases) при ПЕРВОМ создании. При restart
+	// после таймаута шелл чистый — agent может перезапустить setup через run_command.
+	if init := profileInitCommands(); init != "" {
+		_, _, _ = s.run(init, 10*time.Second, nil)
+	}
 	return s
 }
 

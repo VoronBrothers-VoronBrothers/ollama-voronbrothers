@@ -253,6 +253,8 @@ func TestRejectSuicidalCommand(t *testing.T) {
 		"kill -9 0",
 		"kill -1",
 		"killall bash",
+		"pkill bee",
+		"pkill -x bee",
 	}
 	for _, cmd := range bad {
 		if err := rejectSuicidalCommand(cmd); err == nil {
@@ -270,5 +272,23 @@ func TestRejectSuicidalCommand(t *testing.T) {
 		if err := rejectSuicidalCommand(cmd); err != nil {
 			t.Errorf("command %q should be allowed, got %v", cmd, err)
 		}
+	}
+
+	// tmux kill-session -t <own> должен быть заблокирован при заданном BEE_SESSION.
+	t.Setenv("BEE_SESSION", "bee-123")
+	selfKill := []string{
+		"tmux kill-session -t bee-123",
+		"tmux kill-pane -t bee-123",
+		"tmux kill-session -t $BEE_SESSION",
+		"tmux kill-session -t \"$BEE_SESSION\"",
+	}
+	for _, cmd := range selfKill {
+		if err := rejectSuicidalCommand(cmd); err == nil {
+			t.Errorf("command %q should be rejected (targets own session)", cmd)
+		}
+	}
+	// Чужая сессия — разрешена.
+	if err := rejectSuicidalCommand("tmux kill-session -t bee-999"); err != nil {
+		t.Errorf("tmux kill-session targeting OTHER session should be allowed, got %v", err)
 	}
 }

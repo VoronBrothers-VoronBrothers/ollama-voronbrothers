@@ -95,6 +95,13 @@ func statePath() string {
 	return beeStateFile.path
 }
 
+// getBeeState возвращает копию текущего состояния (для save.go и т.п.).
+func getBeeState() beeState {
+	beeStateFile.mu.Lock()
+	defer beeStateFile.mu.Unlock()
+	return beeStateFile.st // struct — value type, это уже копия
+}
+
 // updateState применяет мутацию к состоянию и сохраняет файл.
 // UpdatedAt обновляется всегда; PhaseSince — только при смене Phase
 // (delegate показывает «сколько висит текущий шаг»).

@@ -27,7 +27,8 @@ var suicidalPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bkill\s+(-\w+\s+)*0\b`),  // kill [sig] 0 — вся группа
 	regexp.MustCompile(`\bkill\s+(-\w+\s+)*-1\b`), // kill -1 — все процессы юзера
 	regexp.MustCompile(`\bkillall\b[^\n|;&]*\bbash`),
-	regexp.MustCompile(`\bkillall\b[^\n|;&]*\bbee`),
+	regexp.MustCompile(`\bkillall\b[^\n|;&]*\bbe[e]`),  // killall bee / beex (escape self-match)
+	regexp.MustCompile(`\bpkill\s+(?:-\w+\s+)*[-x]?\s*bee`), // pkill -f/-x bee
 }
 
 // rejectSuicidalCommand возвращает понятную ошибку, если команда снесёт
@@ -41,6 +42,19 @@ func rejectSuicidalCommand(command string) error {
 				"(e.g. `tmux kill-session -t <your-session>`) or don't kill processes at all")
 		}
 	}
+
+	// tmux kill-session / kill-pane: разрешаем ТОЛЬКО чужие сессии, не свою.
+	if self := os.Getenv("BEE_SESSION"); self != "" {
+		for _, sub := range []string{"kill-session", "kill-pane"} {
+			// Ловим как литерал имени сессии, так и shell-переменную $BEE_SESSION.
+			if strings.Contains(flat, sub) &&
+				(strings.Contains(flat, self) ||
+				strings.Contains(flat, "bee_session")) {
+				return fmt.Errorf("refusing to run: `tmux %s` targets your own session — the agent would kill itself. Kill a different session or don't kill tmux objects.", sub)
+			}
+		}
+	}
+
 	// Явное убийство своего pid (kill <bee pid>).
 	self := strconv.Itoa(os.Getpid())
 	for _, pat := range []string{"kill " + self, "kill -9 " + self, "kill -15 " + self} {
