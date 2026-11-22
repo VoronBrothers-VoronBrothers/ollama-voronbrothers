@@ -13,6 +13,11 @@
 > сам определяет версию `<upstream>-voron-<DDMMYYYY>`, ставит `-tags sqlite_fts5` и ldflags,
 > делает бэкапы и атомарную подмену (`sudo mv`, не `cp`).
 > Правила версионирования, systemd drop-in'ы и ручной вариант — в [VORON-RUNBOOK.md](VORON-RUNBOOK.md).
+>
+> ⚠️ Это сборка **Go-бинарников** (`ollama`/`lama`/`bee`). Каталог с готовой сборкой
+> **llama.cpp** (`.so` + `llama-server`) переключается отдельно, без пересборки Go —
+> через env var [`OLLAMA_WHERE_IS_MY_LLAMA_CPP`](VORON-RUNBOOK.md) (см. VORON-RUNBOOK §8):
+> значение пишется в `/etc/ollama/env`, каталог должен быть читаем юзером `ollama`.
 
 ### Поведение по умолчанию
 

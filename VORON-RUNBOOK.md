@@ -9,7 +9,7 @@
 | `/usr/local/bin/*.bak` | Бэкапы старых бинарников: `ollama-<версия>.bak`, при повторе — `-2.bak`, `-3.bak` (откат) |
 | `/etc/systemd/system/ollama.service` | Сервер (User=ollama, Restart=always); env — через `EnvironmentFile=` + LD_LIBRARY_PATH |
 | `/etc/ollama/env` | **Единая конфигурация** всех переменных (serve и TUI), см. §6 |
-| `/usr/local/lib/ollama/{cuda_v13,cuda_v12,vulkan}` | Библиотеки llama.cpp для 5060 Ti (sm_120 — только в cuda_v13, она ПЕРВАЯ в LD_LIBRARY_PATH) |
+| `/usr/local/lib/ollama/{cuda_v13,cuda_v12,vulkan}` | Библиотеки llama.cpp для 5060 Ti (sm_120 — только в cuda_v13, она ПЕРВАЯ в LD_LIBRARY_PATH). Каталог переключается через `OLLAMA_WHERE_IS_MY_LLAMA_CPP`, см. §8 |
 
 **Правило №1: `ollama` и `lama` — всегда пара.** Собираются из одного коммита с одной строкой версии.
 Если пересобрал один без второго — второй устарел (прецедент 08.11.2026: PDF в `/add` работал
@@ -113,6 +113,7 @@ sudo cp /usr/local/bin/lama-<версия>.bak   /usr/local/bin/lama   && sudo c
 | LAMA_MODEL | ollama-model | дефолтная модель TUI `lama` |
 | BEE_AGENT_MODEL | (пусто → DefaultModel) | дефолтный «мозг» под-агента `bee`/`delegate`; единая точка — `envconfig.BeeBrain()`, отдельно от LAMA_MODEL |
 | OLLAMA_AGENT_DISABLE_WEBSEARCH | 1 | web-инструменты агента выкл — поиск через скилл webq |
+| OLLAMA_WHERE_IS_MY_LLAMA_CPP | /usr/local/lib/ollama (default) | активная сборка llama.cpp (llama-server + ggml *.so); см. §8 |
 
 После правки `/etc/ollama/env`: `sudo systemctl daemon-reload && sudo systemctl restart ollama`
 (TUI подхватит при следующем старте, self-restart). Для разового override без правки файла:
@@ -121,9 +122,51 @@ sudo cp /usr/local/bin/lama-<версия>.bak   /usr/local/bin/lama   && sudo c
 **Не делать:** export OLLAMA_*/LAMA_* в `.zshrc`/`.bashrc` — это второй источник правды
 (прецедент 10.11: LAMA_MODEL жила в zshrc, а drop-in'ов TUI не видел).
 
-## 7. Краткая история (чтобы не гадать)
+## 8. Переключение сборки llama.cpp (без пересборки Go)
+
+Это НЕ то же, что §3 (`voron-build.sh` собирает `ollama`/`lama`/`bee` из Go-кода).
+Здесь меняется только каталог с готовыми `.so` + бинарником `llama-server`, на который
+указывает переменная **`OLLAMA_WHERE_IS_MY_LLAMA_CPP`** (default: `/usr/local/lib/ollama`).
+Код — `ml/path.go`: если var задан абсолютным путём, каталог становится первым
+кандидатом в поиске; при unset — штатный автодетект без изменений.
+
+### Как переключить
+1. Новая сборка llama.cpp → любой каталог с абсолютным путём (flat-структура: `llama-server`,
+   `libggml*.so`, `libllama.so` … в одном месте, как в штатном `/usr/local/lib/ollama`).
+2. **Каталог должен быть читаем пользователем `ollama`** (демон работает под этим юзером,
+   а не под `voron`). Для путей внутри `/home/voron/...` — минимум: `chmod o+x` на каждое
+   звено цепочки пути (execute-право, без раскрытия чтения списков).
+3. Записать значение в **`/etc/ollama/env`** (НЕ только в `~/.ollama/env`!):
+   ```bash
+   echo 'OLLAMA_WHERE_IS_MY_LLAMA_CPP=/abs/path/to/build' | sudo tee -a /etc/ollama/env
+   ```
+   ⚠️  **Почему не `~/.ollama/env`:** `ollama serve` стартует через systemd от `User=ollama`,
+   чей `$HOME=/home/ollama`. Go-fallback (`envconfig.Var()`) читает `/etc/ollama/env` +
+   свой (несуществующий) `~/.ollama/env`; домашний env-файл `voron` ему НЕ виден.
+   `~/.ollama/env` работает только для процессов, запущенных самим `voron` (TUI/lama вручную).
+4. `sudo systemctl restart ollama`
+5. Проверка: `ps aux | grep llama-server` → бинарник должен стартовать из нового каталога
+   (прогнать любой чат, чтобы модель загрузилась, если не загружена).
+
+### Чего НЕ нужно делать
+- **LD_LIBRARY_PATH менять не надо** — бинарники `llama-server` имеют `RUNPATH=$ORIGIN`,
+   сами находят соседние `.so` относительно своего расположения (проверено через
+   `readelf -d`). Строка `Environment="LD_LIBRARY_PATH=/usr/local/lib/ollama:…"` в юните
+   осталась исторической, для переключения сборок она не требуется.
+- Пересобирать Go-бинарники (`voron-build.sh`) тоже не нужно — это отдельный механизм (§3).
+
+### Откат
+```bash
+sudo sed -i '/^OLLAMA_WHERE_IS_MY_LLAMA_CPP=/d' /etc/ollama/env
+chmod 750 /home/voron   # если делали o+x только для этого переключения
+sudo systemctl restart ollama
+```
+
+## 9. Краткая история (чтобы не гадать)
 
 - `0.40.12-voron-06112026` — база перед пересборками 07–08.11
 - `0.40.12-voron-07112026` — добавлен бинарник `lama` (см. память `lama-binary-added-2026-11-07.md`)
 - `0.40.12-voron-08112026` — `/add` принимает PDF (pdftotext), см. память `2026-11-08_add-pdf-pdftotext.md`. **Первый раз, когда lama собирали отдельно и упустили — с этого дня правило «всегда оба»**
 - `0.40.12-voron-10112026` — единый файл конфигурации `/etc/ollama/env`: envconfig-fallback для TUI/lama, все drop-in'ы удалены (см. §6), web-инструменты агента отключаются из файла, а не из systemd. См. план `vb-ollama-long-memory/plans/2026-11-10-single-env-file.md`
+- `e8925ac45` — добавлена глобальная переменная `OLLAMA_WHERE_IS_MY_LLAMA_CPP` (envconfig + ml/path.go)
+- 22.11.2026 — починено переключение сборок на практике: var должен жить в `/etc/ollama/env`, а не только в `~/.ollama/env`, + права `o+x` по цепочке пути для юзера `ollama`. См. §8, память `vb-ollama-long-memory/2026-11-22_ollama_where_is_my_llama_cpp_fixed.md`
