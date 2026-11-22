@@ -545,3 +545,23 @@ func TestMessageCounterFreezesOnRunDone(t *testing.T) {
 		t.Fatalf("run done should leave the final message counter: %q", got)
 	}
 }
+
+func TestApplyAgentEventToolCallDetectedEarlyThenFinal(t *testing.T) {
+	m := chatModel{running: true}
+
+	early := coreagent.Event{Type: coreagent.EventToolCallDetected, ToolCalls: []api.ToolCall{{ID: "a", Function: api.ToolCallFunction{Name: "write"}}}}
+	final := coreagent.Event{Type: coreagent.EventToolCallDetected, ToolCalls: []api.ToolCall{
+		{ID: "a", Function: api.ToolCallFunction{Name: "write"}},
+		{ID: "b", Function: api.ToolCallFunction{Name: "edit"}},
+	}}
+
+	m.applyAgentEvent(early)
+	if phase := m.currentWorkingPhase(); phase != "write" {
+		t.Fatalf("phase after early detection = %q, want write", phase)
+	}
+
+	m.applyAgentEvent(final)
+	if len(m.liveMessages) == 0 || len(m.liveMessages[0].ToolCalls) != 2 {
+		t.Fatalf("live tool calls after final event = %#v", m.liveMessages)
+	}
+}

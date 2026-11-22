@@ -2228,6 +2228,15 @@ func (s *llamaServerRunner) Chat(ctx context.Context, req ChatRequest, fn func(C
 				acc.arguments += tc.Function.Arguments
 			}
 
+			if choice.FinishReason == nil && len(toolCalls) > 0 {
+				// Stream partial tool calls (name + whatever arguments have
+				// arrived so far) on intermediate chunks: clients that show a
+				// per-tool status line learn about write/edit early, before the
+				// long argument stream finishes. The final chunk carries the
+				// complete list and replaces these.
+				resp.Message.ToolCalls = partialToolCalls(toolCalls)
+			}
+
 			if choice.FinishReason != nil {
 				doneReason := DoneReasonStop
 				if *choice.FinishReason == "length" {
@@ -2251,7 +2260,7 @@ func (s *llamaServerRunner) Chat(ctx context.Context, req ChatRequest, fn func(C
 				break
 			}
 
-			if resp.Message.Content != "" || resp.Message.Thinking != "" || len(resp.Logprobs) > 0 {
+			if resp.Message.Content != "" || resp.Message.Thinking != "" || len(resp.Logprobs) > 0 || len(resp.Message.ToolCalls) > 0 {
 				fn(resp)
 			}
 		}
@@ -2355,6 +2364,40 @@ func accumulatedToolCalls(accs map[int]*llamaServerToolCallAccumulator) ([]api.T
 	}
 
 	return toolCalls, nil
+}
+
+// partialToolCalls builds the in-progress ToolCall list for intermediate
+// stream chunks. Unlike accumulatedToolCalls it stays silent on undecodable
+// (truncated) arguments: that is normal mid-stream, and only the final chunk
+// reports decode failures.
+func partialToolCalls(accs map[int]*llamaServerToolCallAccumulator) []api.ToolCall {
+	if len(accs) == 0 {
+		return nil
+	}
+
+	maxIndex := 0
+	for index := range accs {
+		maxIndex = max(maxIndex, index)
+	}
+
+	toolCalls := make([]api.ToolCall, 0, len(accs))
+	for index := 0; index <= maxIndex; index++ {
+		acc := accs[index]
+		if acc == nil || (acc.id == "" && acc.name == "") {
+			continue
+		}
+		args, _ := api.ToolCallArgumentsFromJSON([]byte(acc.arguments))
+		toolCalls = append(toolCalls, api.ToolCall{
+			ID: acc.id,
+			Function: api.ToolCallFunction{
+				Index:     acc.index,
+				Name:      acc.name,
+				Arguments: args,
+			},
+		})
+	}
+
+	return toolCalls
 }
 
 func (s *llamaServerRunner) llamaServerChatRequest(req ChatRequest, stream bool) (map[string]any, error) {

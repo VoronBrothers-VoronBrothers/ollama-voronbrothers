@@ -2240,7 +2240,9 @@ func chat(cmd *cobra.Command, opts runOptions) (*api.Message, error) {
 		// about to finish some tool calls)
 		fullResponse.WriteString(content)
 
-		if response.Message.ToolCalls != nil {
+		// Print once, with complete arguments: intermediate chunks carry
+		// partial tool calls that would re-print the same call repeatedly.
+		if response.Done {
 			toolCalls := response.Message.ToolCalls
 			if len(toolCalls) > 0 {
 				fmt.Print(renderToolCalls(toolCalls, false))

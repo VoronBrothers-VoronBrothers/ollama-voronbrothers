@@ -3034,7 +3034,9 @@ func writeChatResponse(c *gin.Context, req api.ChatRequest, ch chan any) {
 				sbContent.WriteString(t.Message.Content)
 				resp = t
 				if len(req.Tools) > 0 {
-					toolCalls = append(toolCalls, t.Message.ToolCalls...)
+					// Reassign (not append): intermediate chunks carry partial
+					// tool calls and the final chunk carries the complete list.
+					toolCalls = t.Message.ToolCalls
 				}
 				if len(t.Logprobs) > 0 {
 					allLogprobs = append(allLogprobs, t.Logprobs...)

@@ -1826,6 +1826,14 @@ func (m chatModel) currentWorkingPhase() string {
 			}
 		}
 	}
+	// A call may be detected but not started yet: its arguments are still
+	// streaming (long for write/edit). Show the name so the status line is
+	// not blind during that phase.
+	for i := len(m.detectedToolCalls) - 1; i >= 0; i-- {
+		if d := m.detectedToolCalls[i].detail; d != "" {
+			return d
+		}
+	}
 	// Fallback: between a tool result and the next model output we keep showing
 	// the last completed tool, so fast tools (edit/write) remain visible in
 	// "Working [..]" while the model processes their results.

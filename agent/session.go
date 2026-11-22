@@ -436,10 +436,16 @@ func (s *Session) chatRound(ctx context.Context, runID string, opts RunOptions, 
 		}
 
 		if len(response.Message.ToolCalls) > 0 {
-			assistant.ToolCalls = append(assistant.ToolCalls, response.Message.ToolCalls...)
-			pendingToolCalls = append(pendingToolCalls, response.Message.ToolCalls...)
-			if err := s.emit(newToolCallDetected(meta, response.Message.ToolCalls)); err != nil {
-				return err
+			// Intermediate chunks re-send the same calls with more arguments
+			// accumulated: merge by ID and only emit detection for new calls,
+			// so clients see write/edit start before arg streaming finishes.
+			var fresh []api.ToolCall
+			assistant.ToolCalls, fresh = upsertToolCalls(assistant.ToolCalls, response.Message.ToolCalls)
+			pendingToolCalls, _ = upsertToolCalls(pendingToolCalls, response.Message.ToolCalls)
+			if len(fresh) > 0 {
+				if err := s.emit(newToolCallDetected(meta, fresh)); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -1085,6 +1091,44 @@ func ApproximateTokens(n int) int {
 
 func messageEmpty(msg api.Message) bool {
 	return msg.Content == "" && msg.Thinking == "" && len(msg.ToolCalls) == 0
+}
+
+// toolCallDedupKey identifies a tool call across stream chunks. Models that
+// omit the ID fall back to the call index only: the name arrives streamed,
+// so including it would not merge partial and final forms.
+func toolCallDedupKey(call api.ToolCall) string {
+	if call.ID != "" {
+		return "id:" + call.ID
+	}
+	return fmt.Sprintf("ix:%d", call.Function.Index)
+}
+
+// upsertToolCalls merges incoming (possibly partial) tool calls into the
+// existing list by dedup key and reports only the calls that are new. The
+// final chunk carries the same calls with complete arguments; those must
+// replace earlier partials without re-emitting detection events.
+func upsertToolCalls(existing, incoming []api.ToolCall) ([]api.ToolCall, []api.ToolCall) {
+	if len(incoming) == 0 {
+		return existing, nil
+	}
+	merged := make([]api.ToolCall, len(existing))
+	copy(merged, existing)
+	keys := make(map[string]int, len(merged))
+	for i, call := range merged {
+		keys[toolCallDedupKey(call)] = i
+	}
+	var fresh []api.ToolCall
+	for _, call := range incoming {
+		key := toolCallDedupKey(call)
+		if index, ok := keys[key]; ok {
+			merged[index] = call
+			continue
+		}
+		keys[key] = len(merged)
+		merged = append(merged, call)
+		fresh = append(fresh, call)
+	}
+	return merged, fresh
 }
 
 // ensureRealUserMessage guards against the "ghost messages" condition where,

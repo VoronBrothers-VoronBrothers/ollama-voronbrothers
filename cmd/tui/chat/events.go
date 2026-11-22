@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -156,7 +157,7 @@ func (m *chatModel) applyAgentEvent(event coreagent.Event) {
 		m.detectedToolCalls = nil
 		m.addDetectedToolCalls(event.ToolCalls)
 		idx := m.ensureLiveAssistantMessage()
-		m.liveMessages[idx].ToolCalls = append(m.liveMessages[idx].ToolCalls, event.ToolCalls...)
+		m.liveMessages[idx].ToolCalls = upsertLiveToolCalls(m.liveMessages[idx].ToolCalls, event.ToolCalls)
 		contextChanged = true
 	case coreagent.EventToolStarted:
 		m.resetStreamingState()
@@ -279,6 +280,39 @@ func (m *chatModel) addDetectedToolCalls(calls []api.ToolCall) {
 			args:   args,
 		}))
 	}
+}
+
+func toolCallDedupeKey(call api.ToolCall) string {
+	if call.ID != "" {
+		return "id:" + call.ID
+	}
+	// Index only: the name arrives streamed, partial names must not split calls.
+	return fmt.Sprintf("ix:%d", call.Function.Index)
+}
+
+// upsertLiveToolCalls merges incoming tool calls into the live assistant
+// message by dedupe key. Early detection events carry partial arguments;
+// the final event carries complete ones and must replace, not duplicate.
+func upsertLiveToolCalls(existing, incoming []api.ToolCall) []api.ToolCall {
+	if len(incoming) == 0 {
+		return existing
+	}
+	merged := make([]api.ToolCall, len(existing))
+	copy(merged, existing)
+	keys := make(map[string]int, len(merged)+len(incoming))
+	for i, call := range merged {
+		keys[toolCallDedupeKey(call)] = i
+	}
+	for _, call := range incoming {
+		key := toolCallDedupeKey(call)
+		if index, ok := keys[key]; ok {
+			merged[index] = call
+			continue
+		}
+		keys[key] = len(merged)
+		merged = append(merged, call)
+	}
+	return merged
 }
 
 func toolFinishedStatus(event coreagent.Event) string {

@@ -2244,3 +2244,40 @@ func TestSessionAllowAllToolsExecutesApprovalTool(t *testing.T) {
 		t.Fatalf("tool content = %q, want approved", result.Messages[2].Content)
 	}
 }
+
+func TestUpsertToolCalls(t *testing.T) {
+	partial := []api.ToolCall{{ID: "a", Function: api.ToolCallFunction{Index: 0, Name: "write"}}}
+	full := []api.ToolCall{{ID: "a", Function: api.ToolCallFunction{Index: 0, Name: "write"}}, {ID: "b", Function: api.ToolCallFunction{Index: 1, Name: "edit"}}}
+
+	// First chunk: both calls are new.
+	merged, fresh := upsertToolCalls(nil, partial)
+	if len(merged) != 1 || len(fresh) != 1 {
+		t.Fatalf("first merge = %d merged / %d fresh", len(merged), len(fresh))
+	}
+
+	// Second chunk: same ID replaces in place, only the new call is fresh.
+	merged, fresh = upsertToolCalls(merged, full)
+	if len(merged) != 2 || len(fresh) != 1 || fresh[0].ID != "b" {
+		t.Fatalf("second merge = %d merged / fresh=%v", len(merged), fresh)
+	}
+
+	// Third chunk: everything known -> no fresh calls.
+	merged, fresh = upsertToolCalls(merged, full)
+	if len(merged) != 2 || len(fresh) != 0 {
+		t.Fatalf("third merge = %d merged / fresh=%v", len(merged), fresh)
+	}
+
+	// Calls without IDs dedupe by index only: partial names must merge.
+	partialName := []api.ToolCall{{Function: api.ToolCallFunction{Index: 0, Name: "wri"}}}
+	fullName := []api.ToolCall{{Function: api.ToolCallFunction{Index: 0, Name: "write"}}}
+	merged, fresh = upsertToolCalls(partialName, fullName)
+	if len(merged) != 1 || len(fresh) != 0 || merged[0].Function.Name != "write" {
+		t.Fatalf("partial-name merge = %#v / fresh=%v", merged, fresh)
+	}
+
+	noID := []api.ToolCall{{Function: api.ToolCallFunction{Index: 0, Name: "write"}}}
+	_, fresh = upsertToolCalls(noID, noID)
+	if len(fresh) != 0 {
+		t.Fatalf("no-ID duplicate reported fresh: %v", fresh)
+	}
+}
