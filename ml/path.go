@@ -5,8 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-
-	"github.com/ollama/ollama/envconfig"
+	"strings"
 )
 
 type libOllamaPathSearch struct {
@@ -83,7 +82,11 @@ func libOllamaPathCandidates(search libOllamaPathSearch) []string {
 	// check below skips it if the directory is absent. When unset, normal
 	// auto-detection (which already finds /usr/local/lib/ollama on a standard
 	// install) continues to apply.
-	if p := envconfig.Var("OLLAMA_WHERE_IS_MY_LLAMA_CPP"); p != "" {
+	//
+	// Priority: ~/.ollama/env > process env (/etc/ollama/env via systemd).
+	// The user home file represents the most recent explicit choice, so it
+	// overrides the value injected by systemd into the process environment.
+	if p := llamaCppOverridePath(); p != "" {
 		if !filepath.IsAbs(p) {
 			slog.Warn("OLLAMA_WHERE_IS_MY_LLAMA_CPP must be an absolute path, ignoring", "path", p)
 		} else {
@@ -139,4 +142,51 @@ func addLocalLibOllamaPaths(add func(string), base, goos, goarch string) {
 func libOllamaPathExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// llamaCppOverridePath returns the OLLAMA_WHERE_IS_MY_LLAMA_CPP value with
+// priority: ~/.ollama/env (user file) > process env. This ensures that a user
+// who edits their home env file to point at a new llama.cpp build does not
+// need to also edit /etc/ollama/env, even when the daemon is started by
+// systemd (which injects /etc/ollama/env into process env before the binary
+// starts).
+var userHomeDirFunc = os.UserHomeDir // overridable in tests
+
+func llamaCppOverridePath() string {
+	const key = "OLLAMA_WHERE_IS_MY_LLAMA_CPP"
+
+	// Read ~/.ollama/env directly. If it contains a non-empty value for this
+	// key, prefer it over whatever systemd put into process env.
+	if home, err := userHomeDirFunc(); err == nil {
+		path := filepath.Join(home, ".ollama", "env")
+		data, err := os.ReadFile(path)
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				k, v, ok := strings.Cut(line, "=")
+				if !ok {
+					continue
+				}
+				if strings.TrimSpace(k) == key {
+					v = strings.Trim(strings.TrimSpace(v), "\"'")
+					// Only use user file value if it actually differs from the
+					// process env — avoids redundant log noise when they match.
+					procEnv := os.Getenv(key)
+					if v != "" && v != procEnv {
+						slog.Info("using OLLAMA_WHERE_IS_MY_LLAMA_CPP from ~/.ollama/env (overrides process env)",
+							"user", v, "process", procEnv)
+						return v
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// No override in user file — fall back to process environment.
+	// (Systemd sets it from /etc/ollama/env; manual `export` also works.)
+	return os.Getenv(key)
 }
