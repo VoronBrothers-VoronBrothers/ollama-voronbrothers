@@ -790,8 +790,8 @@ func (d *Delegate) listModels() agent.ToolResult {
 	} else {
 		b.WriteString("local: ollama server unavailable\n")
 	}
-	if envconfig.DefaultModel != "" {
-		b.WriteString("\ndefault agent brain: " + envconfig.DefaultModel)
+	if d := envconfig.BeeBrain(); d != "" {
+		b.WriteString("\ndefault agent brain: " + d)
 	}
 	return agent.ToolResult{Content: strings.TrimSpace(b.String())}
 }
@@ -813,5 +813,5 @@ func validateSpawnModel(model string) error {
 	if exists, conclusive := localModelCheck(q); exists || !conclusive {
 		return nil // найдена локально ИЛИ сервер недоступен (bee покажет свою ошибку)
 	}
-	return fmt.Errorf("model %q not found in providers.json nor locally; use the default %s", q, envconfig.DefaultModel)
+	return fmt.Errorf("model %q not found in providers.json nor locally; use the default %s", q, envconfig.BeeBrain())
 }

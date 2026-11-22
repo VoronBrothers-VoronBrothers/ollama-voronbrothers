@@ -137,18 +137,11 @@ func parseArgs(args []string) {
 	}
 }
 
-// DefaultAgentModel — каноническое (полное) имя модели по умолчанию для под-агентов.
-// Формат «provider/model» совпадает с тем, как модель отображается в ollama
-// (/v1/models). resolveEndpoint умеет резолвить эту форму до имени API.
-// Single source of truth for the built-in default model is envconfig.DefaultModel
-// (shared with the `lama` launcher). Override at runtime with BEE_AGENT_MODEL.
-const DefaultAgentModel = envconfig.DefaultModel
-
+// defaultModel — модель по умолчанию для bee. Единый (глобальный) источник
+// живёт в envconfig.BeeBrain(): читает BEE_AGENT_MODEL, иначе DefaultModel.
+// Это отдельная переменная от LAMADefaultModel (бинарник lama).
 func defaultModel() string {
-	if m := os.Getenv("BEE_AGENT_MODEL"); m != "" {
-		return m
-	}
-	return DefaultAgentModel
+	return envconfig.BeeBrain()
 }
 
 // runTask — одна итерация agentic tool-loop по задаче. Не выходит в REPL,

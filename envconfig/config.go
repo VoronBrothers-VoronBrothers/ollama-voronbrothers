@@ -267,6 +267,18 @@ var (
 	HsaOverrideGfxVersion = String("HSA_OVERRIDE_GFX_VERSION")
 )
 
+// BeeBrain is the single global source for the model the `bee` sub-agent brain
+// runs on and that the delegate tool spawns by default. It reads BEE_AGENT_MODEL
+// from the environment; when unset it falls back to DefaultModel.
+// By design this is a SEPARATE variable from LAMADefaultModel (the lama launcher
+// binary) — the two defaults are independent of each other.
+func BeeBrain() string {
+	if m := Var("BEE_AGENT_MODEL"); m != "" {
+		return m
+	}
+	return DefaultModel
+}
+
 func Uint(key string, defaultValue uint) func() uint {
 	return func() uint {
 		if s := Var(key); s != "" {
