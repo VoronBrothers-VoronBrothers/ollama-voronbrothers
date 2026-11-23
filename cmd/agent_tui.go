@@ -264,9 +264,7 @@ func agentDefaultSystemPromptWithWorkingDir(now time.Time, modelName string, wor
 	parts := []string{
 		"Current date: " + date + ".",
 	}
-	if workingDir != "" {
-		parts = append(parts, "Current working directory: "+strconv.Quote(workingDir)+".")
-	}
+	parts = append(parts, "Current working directory: discover with pwd.")
 	return strings.Join(parts, "\n")
 }
 
