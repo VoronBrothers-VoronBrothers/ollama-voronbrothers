@@ -23,12 +23,14 @@ const (
 const (
 	defaultCompactionContextWindowTokens = 32768
 	defaultCompactionKeepUserTurns       = 3
-	defaultCompactionThreshold           = 0.75 // < 32k context
-	highCtxCompactionThreshold          = 0.85 // 32k–90k context
-	maxCtxCompactionThreshold            = 0.93 // > 90k context
+	defaultCompactionThreshold           = 0.85 // < 32k context
+	highCtxCompactionThreshold          = 0.90 // 32k–50k context
+	midCtxCompactionThreshold           = 0.93 // 50k–80k context
+	maxCtxCompactionThreshold            = 0.95 // > 80k context
 
-	highCtxBoundaryTokens     = 32768  // above this, use highCtx threshold
-	maxCtxBoundaryTokens      = 90112  // above this, use max threshold
+	highCtxBoundaryTokens     = 32768  // at/above this: highCtx threshold (32k–50k)
+	midCtxBoundaryTokens      = 51200  // at/above this: midCtx threshold (50k–80k)
+	maxCtxBoundaryTokens      = 81920  // above this: max threshold (> 80k)
 
 	compactOnlySummaryContextTokens      = 16000
 
@@ -209,6 +211,8 @@ func (c *SimpleCompactor) effectiveThreshold(contextWindow int) float64 {
 	switch {
 	case contextWindow > maxCtxBoundaryTokens:
 		return maxCtxCompactionThreshold
+	case contextWindow >= midCtxBoundaryTokens:
+		return midCtxCompactionThreshold
 	case contextWindow >= highCtxBoundaryTokens:
 		return highCtxCompactionThreshold
 	default:
