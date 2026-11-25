@@ -1968,6 +1968,7 @@ func (m chatModel) estimatePromptTokens(messages []api.Message, systemPrompt str
 func estimatePromptTokenCount(systemPrompt string, messages []api.Message, tools api.Tools, format string) int {
 	total := approximateTokenCount(systemPrompt)
 	for _, msg := range messages {
+		total += 5 // per-message overhead: role/delimiter tokens in chat template
 		total += approximateTokenCount(msg.Role)
 		total += approximateTokenCount(msg.Content)
 		total += approximateTokenCount(msg.Thinking)
@@ -1984,11 +1985,19 @@ func estimatePromptTokenCount(systemPrompt string, messages []api.Message, tools
 }
 
 func approximateTokenCount(text string) int {
-	n := len([]rune(text))
-	if n <= 0 {
+	ascii, other := 0, 0
+	for _, r := range text {
+		if r < 128 {
+			ascii++
+		} else {
+			other++
+		}
+	}
+	if ascii+other <= 0 {
 		return 0
 	}
-	return max(1, (n+3)/4)
+	// ASCII ≈ 4 chars/token; non-ASCII (Cyrillic etc.) ≈ 1.7 chars/token.
+	return max(1, (ascii+3)/4+(other*3+2)/5)
 }
 
 func formatTokenCount(count int) string {

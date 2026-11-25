@@ -402,7 +402,21 @@ func estimateCompactionTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	return ApproximateTokens(len([]rune(text)))
+	return approximateTextTokens(text)
+}
+
+// approximateTextTokens estimates tokens for mixed-language text: ASCII ≈ 4
+// chars/token, non-ASCII (Cyrillic etc.) ≈ 1.7 chars/token.
+func approximateTextTokens(text string) int {
+	ascii, other := 0, 0
+	for _, r := range text {
+		if r < 128 {
+			ascii++
+		} else {
+			other++
+		}
+	}
+	return (ascii+3)/4 + (other*3+2)/5
 }
 
 func estimateMessagesTokens(messages []api.Message) int {
