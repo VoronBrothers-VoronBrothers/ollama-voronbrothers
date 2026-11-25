@@ -55,6 +55,10 @@ func main() {
 	if flagModel == "" {
 		flagModel = defaultModel()
 	}
+	if flagModel == "" {
+		fmt.Fprintln(os.Stderr, "bee: BEE_AGENT_MODEL is not set (process env / ~/.ollama/env / /etc/ollama/env) — specify the agent brain")
+		os.Exit(2)
+	}
 	if flagTask == "" {
 		flagTask = os.Getenv("BEE_TASK")
 	}
@@ -138,8 +142,8 @@ func parseArgs(args []string) {
 }
 
 // defaultModel — модель по умолчанию для bee. Единый (глобальный) источник
-// живёт в envconfig.BeeBrain(): читает BEE_AGENT_MODEL, иначе DefaultModel.
-// Это отдельная переменная от LAMADefaultModel (бинарник lama).
+// живёт в envconfig.BeeBrain(): читает BEE_AGENT_MODEL (обязательная
+// переменная, встроенного fallback'а нет). Отдельна от LAMADefaultModel (бинарник lama).
 func defaultModel() string {
 	return envconfig.BeeBrain()
 }

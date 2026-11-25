@@ -246,12 +246,6 @@ func String(s string) func() string {
 	}
 }
 
-// DefaultModel is the single canonical built-in default model shared by every
-// binary (the TUI/`lama` launcher and the `bee` sub-agent brain). It is used
-// only when no override env var is set — LAMA_MODEL for the launcher,
-// BEE_AGENT_MODEL for sub-agents. Change it here to rebase all defaults at once.
-const DefaultModel = "proxyapi/deepseek/deepseek-v4.1-flash-1017"
-
 var (
 	LLMLibrary = String("OLLAMA_LLM_LIBRARY")
 	Editor     = String("OLLAMA_EDITOR")
@@ -269,14 +263,13 @@ var (
 
 // BeeBrain is the single global source for the model the `bee` sub-agent brain
 // runs on and that the delegate tool spawns by default. It reads BEE_AGENT_MODEL
-// from the environment; when unset it falls back to DefaultModel.
+// from the environment (process env > ~/.ollama/env > /etc/ollama/env).
+// The variable is REQUIRED — there is no built-in fallback; when unset this
+// returns "" and the caller must fail with a clear error.
 // By design this is a SEPARATE variable from LAMADefaultModel (the lama launcher
 // binary) — the two defaults are independent of each other.
 func BeeBrain() string {
-	if m := Var("BEE_AGENT_MODEL"); m != "" {
-		return m
-	}
-	return DefaultModel
+	return Var("BEE_AGENT_MODEL")
 }
 
 func Uint(key string, defaultValue uint) func() uint {

@@ -77,7 +77,7 @@ func (d *Delegate) Schema() api.ToolFunction {
 	})
 	props.Set("model", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
-		Description: "Model name for the agent (default: proxyapi/deepseek/deepseek-v4.1-flash-1017). Optional.",
+		Description: "Model name for the agent. Optional; if omitted, the configured default brain is used (env BEE_AGENT_MODEL: process env > ~/.ollama/env > /etc/ollama/env).",
 	})
 	props.Set("id", api.ToolProperty{
 		Type:        api.PropertyType{"string"},
@@ -155,6 +155,11 @@ func (d *Delegate) Execute(_ context.Context, toolCtx agent.ToolContext, args ma
 }
 
 func (d *Delegate) spawn(cwd, task, model, id string) (agent.ToolResult, error) {
+	// Пустая модель → единая точка резолва дефолтного мозга (BEE_AGENT_MODEL
+	// с приоритетом process env > ~/.ollama/env > /etc/ollama/env).
+	if strings.TrimSpace(model) == "" {
+		model = envconfig.BeeBrain()
+	}
 	// Fail fast: don't spawn a doomed session if the model doesn't exist.
 	if err := validateSpawnModel(model); err != nil {
 		return agent.ToolResult{Content: "Error: " + err.Error()}, nil
@@ -608,9 +613,11 @@ func brainArgs(task, model string) []string {
 	return []string{"/bin/bash", "-c", `echo "[bee] bee binary not found at ` + beePath + `; placeholder brain"; cat`}
 }
 
+// displayModel — человекочитаемый вариант модели для статусных сообщений.
+// Пустая модель → динамический дефолт из BEE_AGENT_MODEL (без хардкода имён).
 func displayModel(model string) string {
 	if model == "" {
-		return "(default: proxyapi/deepseek/deepseek-v4.1-flash-1017)"
+		return "(default: " + envconfig.BeeBrain() + ")"
 	}
 	return model
 }

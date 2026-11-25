@@ -49,12 +49,12 @@
 Отдельный бинарник для мгновенного запуска полноценного TUI (bubbletea) без приветственного меню:
 
 ```bash
-lama              # → TUI с моделью по умолчанию
+lama              # → TUI с моделью из LAMA_MODEL
 lama llama3       # → TUI с моделью "llama3"
 ```
 
-Модель по умолчанию — `envconfig.DefaultModel` (единый источник для всех бинарников,
-override через env var `LAMA_MODEL`). Внутренне вызывает `cmd.LaunchModelTUI`, минуя welcome/menu.
+Модель TUI задаётся обязательной переменной `LAMA_MODEL` (встроенного дефолта нет;
+приоритет: process env > ~/.ollama/env > /etc/ollama/env). Внутренне вызывает `cmd.LaunchModelTUI`, минуя welcome/menu.
 
 **Собирается и ставится только вместе с остальными** — тем же `scripts/voron-build.sh`
 (отдельная сборка lama быстро устаревает; прецедент 08.11: PDF в `/add` был только в одном бинарнике).
@@ -125,7 +125,8 @@ ollama stop; ollama tui lama 'ты продолжаешь задачу, конт
 свободу; вы наблюдаете их вывод и направляете.
 
 - **Модель «мозга»** — аргумент `model` в spawn; единый источник —
-  `envconfig.BeeBrain()` (читает env var `BEE_AGENT_MODEL`, иначе `DefaultModel`).
+  `envconfig.BeeBrain()` (обязательная переменная `BEE_AGENT_MODEL`, встроенного
+  fallback'а нет).
   Это отдельная переменная от `LAMA_MODEL`: bee и lama независимы. Перед спавном
   модель проверяется (guard):
   нет ни в providers, ни локально → явная ошибка вместо тишайшего 404 внутри сессии.

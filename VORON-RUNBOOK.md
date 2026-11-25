@@ -111,7 +111,7 @@ sudo cp /usr/local/bin/lama-<версия>.bak   /usr/local/bin/lama   && sudo c
 | OLLAMA_MAX_LOADED_MODELS / OLLAMA_NUM_PARALLEL | 2 / 1 | лимиты VRAM и параллелизм |
 | OLLAMA_PROVIDERS_CONFIG | /home/voron/.ollama/providers.json | внешние провайдеры (нужны ACL на ~/.ollama для юзера ollama) |
 | LAMA_MODEL | ollama-model | дефолтная модель TUI `lama` |
-| BEE_AGENT_MODEL | (пусто → DefaultModel) | дефолтный «мозг» под-агента `bee`/`delegate`; единая точка — `envconfig.BeeBrain()`, отдельно от LAMA_MODEL |
+| BEE_AGENT_MODEL | (обязательна, встроенного дефолта нет) | «мозг» под-агента `bee`/`delegate`; единая точка — `envconfig.BeeBrain()`, отдельно от LAMA_MODEL |
 | OLLAMA_AGENT_DISABLE_WEBSEARCH | 1 | web-инструменты агента выкл — поиск через скилл webq |
 | OLLAMA_WHERE_IS_MY_LLAMA_CPP | /usr/local/lib/ollama (default) | активная сборка llama.cpp (llama-server + ggml *.so); см. §8 |
 

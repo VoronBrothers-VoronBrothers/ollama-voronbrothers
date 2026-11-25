@@ -2,7 +2,7 @@
 //
 // Использование:
 //
-//	lama              → TUI с моделью по умолчанию (envconfig.DefaultModel, deepseek; override: LAMA_MODEL)
+//	lama              → TUI с моделью из LAMA_MODEL (обязательная переменная)
 //	lama mymodel      → TUI с моделью "mymodel"
 package main
 
@@ -14,11 +14,12 @@ import (
 )
 
 func main() {
-	// Built-in default (no LAMA_MODEL set) is the single canonical source in
-	// envconfig.DefaultModel — deepseek. Override at runtime with LAMA_MODEL.
+	// LAMA_MODEL — обязательная (process env / ~/.ollama/env / /etc/ollama/env),
+	// встроенного fallback'а нет.
 	model := envconfig.Var("LAMA_MODEL")
 	if model == "" {
-		model = envconfig.DefaultModel
+		os.Stderr.WriteString("lama: LAMA_MODEL is not set (process env / ~/.ollama/env / /etc/ollama/env) — specify the TUI model\n")
+		os.Exit(2)
 	}
 
 	args := os.Args[1:]

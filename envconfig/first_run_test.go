@@ -7,32 +7,32 @@ import (
 	"testing"
 )
 
-// The raw template keeps a __DEFAULT_MODEL__ placeholder; rendering resolves it
-// to the single source of truth (DefaultModel). These guards stop either side
-// from drifting: hardcoding a model back into the template, or leaving the
-// literal token in a written file.
-const envModelPlaceholder = "__DEFAULT_MODEL__"
+// The template carries no built-in default model: BEE_AGENT_MODEL / LAMA_MODEL
+// are user-provided and required. These guards stop a concrete model name or an
+// old placeholder token from leaking back into the written env file.
+const (
+	envModelPlaceholder = "__DEFAULT_MODEL__"
+	legacyDefaultModel  = "deepseek-v4.1-flash-1017"
+)
 
-func TestRenderedEnvTemplate_ResolvesDefaultModel(t *testing.T) {
-	got := renderedEnvTemplate()
-	if strings.Contains(got, envModelPlaceholder) {
-		t.Errorf("rendered template still contains placeholder %q", envModelPlaceholder)
+func assertNoBakedInDefault(t *testing.T, s string) {
+	t.Helper()
+	if strings.Contains(s, envModelPlaceholder) {
+		t.Errorf("file contains literal placeholder %q", envModelPlaceholder)
 	}
-	if !strings.Contains(got, DefaultModel) {
-		t.Errorf("rendered template missing DefaultModel %q", DefaultModel)
-	}
-}
-
-// Guards that the render is meaningful: the raw template must carry the token.
-func TestRawTemplateHasDefaultModelPlaceholder(t *testing.T) {
-	if !strings.Contains(envFileTemplate, envModelPlaceholder) {
-		t.Errorf("envFileTemplate lost %q — rendering has nothing to resolve", envModelPlaceholder)
+	if strings.Contains(s, legacyDefaultModel) {
+		t.Errorf("file contains a baked-in default model name %q", legacyDefaultModel)
 	}
 }
 
-// Service→Recreate path: ~/.ollama/env must contain the resolved model, never
-// the literal token.
-func TestRecreateUserEnvFile_WritesResolvedDefault(t *testing.T) {
+// The rendered template must not leak placeholders or concrete model names.
+func TestRenderedEnvTemplate_NoBakedInDefault(t *testing.T) {
+	assertNoBakedInDefault(t, renderedEnvTemplate())
+}
+
+// Service→Recreate path: ~/.ollama/env must be written without any baked-in
+// default model.
+func TestRecreateUserEnvFile_WritesNoBakedInDefault(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	path, err := RecreateUserEnvFile()
 	if err != nil {
@@ -42,13 +42,12 @@ func TestRecreateUserEnvFile_WritesResolvedDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	assertRendered(t, data)
+	assertNoBakedInDefault(t, string(data))
 }
 
 // First-launch path (EnsureUserOllamaDir): the env file it seeds must also be
-// resolved. This is the exact spot where a raw template write used to leak
-// __DEFAULT_MODEL__ into ~/.ollama/env.
-func TestEnsureUserOllamaDir_WritesResolvedDefault(t *testing.T) {
+// clean of placeholders and concrete model names.
+func TestEnsureUserOllamaDir_WritesNoBakedInDefault(t *testing.T) {
 	setTestHome(t, t.TempDir())
 
 	home, _ := os.UserHomeDir()
@@ -66,16 +65,5 @@ func TestEnsureUserOllamaDir_WritesResolvedDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", envPath, err)
 	}
-	assertRendered(t, data)
-}
-
-func assertRendered(t *testing.T, data []byte) {
-	t.Helper()
-	s := string(data)
-	if strings.Contains(s, envModelPlaceholder) {
-		t.Errorf("written env file contains literal %q — template not rendered", envModelPlaceholder)
-	}
-	if !strings.Contains(s, DefaultModel) {
-		t.Errorf("written env file missing DefaultModel %q", DefaultModel)
-	}
+	assertNoBakedInDefault(t, string(data))
 }

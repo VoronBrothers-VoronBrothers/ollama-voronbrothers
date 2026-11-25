@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const envFileTemplate = `# =====================================================================
@@ -173,14 +172,12 @@ const envFileTemplate = `# =====================================================
 # TUI / AGENT (lama)
 # ---------------------------------------------------------------------
 
-# Built-in default model is __DEFAULT_MODEL__ (single source of truth:
-# envconfig.DefaultModel). Uncomment to override the TUI launcher's default
-# model.
+# TUI launcher's model (REQUIRED, no built-in default).
 # LAMA_MODEL=lama
 
-# Override the sub-agent (bee) brain model. Built-in default: same as above.
+# Sub-agent (bee) brain model (REQUIRED, no built-in default).
 # Separate variable from LAMA_MODEL — bee and lama are independent.
-# BEE_AGENT_MODEL=__DEFAULT_MODEL__
+# BEE_AGENT_MODEL=your/provider/model
 
 # Disable the agent's web_search / web_fetch tools.
 # OLLAMA_AGENT_DISABLE_WEBSEARCH=1
@@ -262,12 +259,12 @@ func RecreateUserEnvFile() (string, error) {
 	return doWriteEnvFileAt(path, true)
 }
 
-// renderedEnvTemplate returns envFileTemplate with the __DEFAULT_MODEL__
-// placeholder resolved to envconfig.DefaultModel. Every path that writes the
-// reference env file (first-launch and Service→Recreate) must go through this
-// so the built-in default never drifts from its single source of truth.
+// renderedEnvTemplate returns envFileTemplate ready to write. The template
+// no longer carries a built-in default model (BEE_AGENT_MODEL / LAMA_MODEL are
+// user-provided, required), so it is returned as-is; this function is kept
+// as the single render point for future placeholder needs.
 func renderedEnvTemplate() string {
-	return strings.ReplaceAll(envFileTemplate, "__DEFAULT_MODEL__", DefaultModel)
+	return envFileTemplate
 }
 
 // doWriteEnvFileAt writes the reference template to path. With force=false an
@@ -284,8 +281,7 @@ func doWriteEnvFileAt(path string, force bool) (string, error) {
 		return "", fmt.Errorf("cannot create %s: %w", dir, err)
 	}
 
-	// Render the built-in default model into the reference so the recreated
-	// file always reflects envconfig.DefaultModel (no drift / hardcoding).
+	// The template is written as-is (no placeholders left to render).
 	content := renderedEnvTemplate()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("cannot write %s: %w", path, err)
@@ -369,8 +365,7 @@ func EnsureUserOllamaDir() {
 		}
 	}
 
-	// env file — reuse the same rendered template as /etc/ollama/env so the
-	// built-in default model is resolved (no literal __DEFAULT_MODEL__ left).
+	// env file — the same template as /etc/ollama/env (no placeholders left).
 	envPath := filepath.Join(base, "env")
 	writeIfMissing(envPath, []byte(renderedEnvTemplate()), 0644)
 
