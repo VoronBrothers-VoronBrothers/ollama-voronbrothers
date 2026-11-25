@@ -1614,3 +1614,59 @@ func TestCheckPullRequiresUsesRunningVersion(t *testing.T) {
 		t.Fatal("expected stamped client below requires to fail")
 	}
 }
+
+// TestMakeRequestWithRetryPreconditionFailed: a registry that gates pulls on
+// the Ollama version advertised in User-Agent answers 412. We must retry once
+// with the neutral user-agent (capital "O") which registry parsers don't match,
+// and then succeed.
+func TestMakeRequestWithRetryPreconditionFailed(t *testing.T) {
+	var uas []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uas = append(uas, r.Header.Get("User-Agent"))
+		if strings.HasPrefix(r.Header.Get("User-Agent"), "ollama/") {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			fmt.Fprintln(w, `{"message":"requires a newer version of Ollama"}`)
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+
+	requestURL, err := url.Parse(ts.URL + "/v2/test/model/manifests/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := makeRequestWithRetry(t.Context(), http.MethodGet, requestURL, make(http.Header), nil, &registryOptions{})
+	if err != nil {
+		t.Fatalf("makeRequestWithRetry = %v", err)
+	}
+	resp.Body.Close()
+
+	if len(uas) != 2 || !strings.HasPrefix(uas[1], "Ollama/") {
+		t.Fatalf("User-Agent history = %#v, want second request with neutral UA", uas)
+	}
+}
+
+// TestMakeRequestWithRetryPreconditionFailedStrict: OLLAMA_STRICT_PULL=1 fails
+// fast on 412 without the neutral user-agent retry.
+func TestMakeRequestWithRetryPreconditionFailedStrict(t *testing.T) {
+	t.Setenv("OLLAMA_STRICT_PULL", "1")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		fmt.Fprintln(w, `{"message":"requires a newer version of Ollama"}`)
+	}))
+	defer ts.Close()
+
+	requestURL, err := url.Parse(ts.URL + "/v2/test/model/manifests/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := makeRequestWithRetry(t.Context(), http.MethodGet, requestURL, make(http.Header), nil, &registryOptions{})
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "412") {
+		t.Fatalf("makeRequestWithRetry = %v, want 412 error", err)
+	}
+}

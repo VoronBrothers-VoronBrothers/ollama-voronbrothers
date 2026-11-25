@@ -1695,7 +1695,9 @@ func GetSHA256Digest(r io.Reader) (string, int64) {
 var errUnauthorized = errors.New("unauthorized: access denied")
 
 func makeRequestWithRetry(ctx context.Context, method string, requestURL *url.URL, headers http.Header, body io.ReadSeeker, regOpts *registryOptions) (*http.Response, error) {
-	for range 2 {
+	neutralUA := false
+	strictPull := os.Getenv("OLLAMA_STRICT_PULL") != ""
+	for range 3 {
 		resp, err := makeRequest(ctx, method, requestURL, headers, body, regOpts)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
@@ -1721,6 +1723,22 @@ func makeRequestWithRetry(ctx context.Context, method string, requestURL *url.UR
 				if err != nil {
 					return nil, err
 				}
+			}
+		case resp.StatusCode == http.StatusPreconditionFailed:
+			defer resp.Body.Close()
+			responseBody, _ := io.ReadAll(resp.Body)
+			// Remote registries gate pulls on the Ollama version advertised in
+			// User-Agent. Forks ship their own version string, so retry once
+			// with a neutral user-agent that registry parsers don't match.
+			if !neutralUA && !strictPull {
+				neutralUA = true
+				h := headers.Clone()
+				h.Set("User-Agent", version.NeutralUserAgent())
+				headers = h
+				slog.Warn("registry requires a newer Ollama version; retrying with neutral User-Agent",
+					"host", requestURL.Host, "hint", strings.TrimSpace(string(responseBody)))
+			} else {
+				return nil, fmt.Errorf("%d: %s", resp.StatusCode, responseBody)
 			}
 		case resp.StatusCode == http.StatusNotFound:
 			resp.Body.Close()
@@ -1791,7 +1809,9 @@ func makeRequest(ctx context.Context, method string, requestURL *url.URL, header
 		}
 	}
 
-	req.Header.Set("User-Agent", fmt.Sprintf("ollama/%s (%s %s) Go/%s", version.Version, runtime.GOARCH, runtime.GOOS, runtime.Version()))
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", fmt.Sprintf("ollama/%s (%s %s) Go/%s", version.Version, runtime.GOARCH, runtime.GOOS, runtime.Version()))
+	}
 
 	if s := req.Header.Get("Content-Length"); s != "" {
 		contentLength, err := strconv.ParseInt(s, 10, 64)

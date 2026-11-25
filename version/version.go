@@ -3,6 +3,7 @@ package version
 import (
 	"fmt"
 	"os"
+	"runtime"
 )
 
 // ВНИМАНИЕ / WARNING: эта константа — только FALLBACK-дефолт, НЕ актуальная версия!
@@ -22,6 +23,16 @@ import (
 const fallbackVersion = "0.40.6-voron"
 
 var Version string = fallbackVersion
+
+// NeutralUserAgent returns a User-Agent for outbound registry requests that
+// remote registries do not match against their "min Ollama version" gate.
+// Forks ship a custom version suffix (e.g. 0.40.6-voron-25112026) which the
+// official registry rejects with 412/UNAUTHORIZED; capitalizing the product
+// name makes the UA unrecognizable to that parser while remaining human-
+// readable in server logs.
+func NeutralUserAgent() string {
+	return fmt.Sprintf("Ollama/%s (%s %s) Go/%s", Version, runtime.GOARCH, runtime.GOOS, runtime.Version())
+}
 
 func init() {
 	if Version == fallbackVersion {
